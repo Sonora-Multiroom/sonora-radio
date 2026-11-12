@@ -142,8 +142,9 @@ the hub starts and lists the extension as disabled.
 - **A human-readable label after the UUID** (`radiobrowser://<uuid>#radio-roks`): accepted and
   ignored, so a URI can be made readable in logs and configuration; the station is identified by
   the UUID alone.
-- **A station name that is very long, or contains HTML or control characters**: shortened to a
-  fixed limit and stripped of control characters before it names an input or appears in a log.
+- **A station name that is very long, or contains HTML or control characters**: stripped of control
+  characters and bounded by a safety limit before it is offered as the input's title; the hub
+  shortens it to its own display length. Logs identify the station by UUID, not by name.
 - **A reconnect after a network blip, or repeated plays of the same station**: every play and
   every re-lookup goes through the catalogue's play-counting lookup; the catalogue itself counts at
   most one play per address per station per day, so reconnects do not inflate popularity.
@@ -180,9 +181,10 @@ the hub starts and lists the extension as disabled.
   lookup and use the station's already-resolved stream address.
 - **FR-007**: The extension MUST hand the hub only an `http` or `https` stream address and refuse
   any other scheme with an error naming the station UUID.
-- **FR-008**: The extension MUST name the resolved input after the station, its name shortened to a
-  fixed maximum length and stripped of control characters, so that clients that supplied no input
-  name see the station's name.
+- **FR-008**: The extension MUST offer the station's name to the hub as the resolved input's title,
+  stripped of control characters and bounded by a generous safety limit, so that clients that
+  supplied no input name see the station's name. It MUST NOT shorten the name to a display length:
+  the hub decides how long an input name may be.
 - **FR-009**: The extension MUST ask the hub to look the station up again by its UUID when the hub
   reports the stream address was refused, rather than retrying the old address.
 - **FR-010**: The extension MUST refuse a station, with an error naming its codec, only when the
@@ -294,8 +296,10 @@ Kraina FM, Radio NV).
 - **Codec support is the hub's own list** (today mp3, aac, opus, webm, ogg_vorbis, wav, flac); the
   extension asks the hub rather than keeping a copy.
 - **Default limits** (tunable): about 2 s to connect and 5 s to read per request, at most 3 servers
-  per play; together these keep a failing play under the 15 s in SC-003. Station names are bounded
-  to roughly 100 characters.
+  per play; together these keep a failing play under the 15 s in SC-003.
+- **Name length is the hub's call**: the hub cuts a resolved title to its own display limit (64
+  characters at API 0.1.33, which the owner may raise). The extension's safety limit (256
+  characters) only bounds untrusted text and is well above any display limit.
 - **The label after `#`** is decided here (the backlog left it open): accepted and ignored. The
   resolved station name, not the label, names the input.
 - **Out of scope**: catalogue search and browse (`station-search-api.md`), favourites
