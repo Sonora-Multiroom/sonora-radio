@@ -115,8 +115,8 @@ inherited from the starter: use `-Plocal` while developing.
 ## Specification and backlog
 
 - **Spec Kit** 1.4.0 (integration `claude`, scripts `ps`), set up 2026-11-13 with the `agent-context`,
-  `archive`, `git` and `bug` extensions. The constitution is still the unfilled template: run
-  `/speckit-constitution` before the first feature, then read `.specify/memory/constitution.md`.
+  `archive`, `git` and `bug` extensions. Read `.specify/memory/constitution.md` (v1.0.0, ratified
+  2026-11-13) before planning.
   Lookup order: `specs/NNN-*/` → `.specify/memory/` → `.specify/archive/`. No feature exists yet;
   the backlog is the only design record.
 - **Backlog** in `docs/backlog/`: one Markdown file per proposal with a header block (`Status`,

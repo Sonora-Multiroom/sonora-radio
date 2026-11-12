@@ -59,14 +59,37 @@ volume, stop the test route first, a known-good station (KissFM, Kraina FM, Radi
    station, and nothing plays; no input is left behind in `GET /api/v2/inputs`.
 4. The hub log shows which radio-browser server answered, and the request carried the
    `sonora-radio/<version>` `User-Agent` (from the extension's own DEBUG log).
-5. With the configured server list pointing at an unreachable host first, the play still succeeds
+5. An HLS station (`hls = 1`) plays on `office` for a few minutes, or, if it does not, the
+   decision to refuse HLS is recorded with the evidence.
+6. A station whose codec is known and unsupported is refused with an error naming the codec, and
+   one labelled `UNKNOWN` (with a playable stream) plays.
+7. With the configured server list pointing at an unreachable host first, the play still succeeds
    through the next server.
-6. Afterwards: no ALSA playback device is open, `audio.output.routes` for `office` reads 0, and
+8. Afterwards: no ALSA playback device is open, `audio.output.routes` for `office` reads 0, and
    the `office` volume and mute are back as recorded.
 
-## Open questions
+## Decisions (2026-11-13, agreed with the owner)
 
-- **Runtime path: answered 2026-11-13, no hub change needed** (read in `sonora-multiroom` master,
+- **Scheme:** `radiobrowser://<stationuuid>`. It names the source; `radio://` stays free for
+  something broader. The UUID is the only stable station identifier radio-browser has (see below).
+- **Codecs:** refuse a station at resolve time, with an `InputResolutionException` naming the codec,
+  only when its `codec` is known **and** the hub cannot decode it. radio-browser's labels are
+  free-form, so map them first: `MP3` → `mp3`, `AAC` and `AAC+` → `aac`, `OPUS` → `opus`, `FLAC` →
+  `flac`; let `OGG`, `UNKNOWN` and an empty codec through, since the decoder detects the format from
+  the stream itself. Check the mapped name with `SupportedCodecRegistry.isSupported` (today `mp3`,
+  `aac`, `opus`, `webm`, `ogg_vorbis`, `wav`, `flac`).
+- **HLS stations** (`hls = 1`): allowed. The live checks include one HLS station; if it does not
+  play reliably, refuse HLS with a clear reason rather than hold up the feature, and record why
+  (hub backlog `hls-link-refresh.md`).
+- **Clicks:** every resolve goes through `/json/url/{stationuuid}`, re-resolves included.
+  radio-browser counts one click per IP per station per day, so reconnects do not inflate it.
+- **API version:** `multiroom.require_api_version` 0.1.33, the version production runs (strictly
+  0.1.28 is enough, for `ResolvedInputEndpoint.title`).
+- **Extension version:** starts at 0.1.0.
+
+## Findings from the hub (2026-11-13)
+
+- **Runtime path: no hub change needed** (read in `sonora-multiroom` master,
   API 0.1.33). `POST /api/v2/play` checks only that `uri` is not blank (`PlaybackRequest`);
   `DeviceRegistryServiceImpl.registerInput` checks no scheme; route creation calls
   `InputHandlerRegistry.resolveInput`, and `DefaultInputResolutionService` offers the URI to each
@@ -83,12 +106,12 @@ volume, stop the test route first, a known-good station (KissFM, Kraina FM, Radi
   `POST /api/v2/inputs` costs no radio-browser call until it plays. It resolves again on expiry and
   on a refused link (HUB-038); after other reconnect failures it does not yet (hub backlog
   `re-resolve-on-reconnect-failure.md`), so a station whose stream host vanished ends its route.
-- **Should a resolve count a click every time?** One play can resolve several times (reconnects).
-  The service counts one click per IP per station per day anyway, so probably harmless; confirm.
-- **HLS stations** (`hls = 1`): does the hub play them reliably (see hub backlog
-  `hls-link-refresh.md`), or should they be refused with a clear reason?
-- **Codecs:** refuse a station whose `codec` the hub cannot decode (`SupportedCodecRegistry`) at
-  resolve time with an `InputResolutionException` naming the codec, rather than letting the
-  pipeline fail later.
-- **Name of the scheme:** `radiobrowser://` (names the source) or `radio://` (shorter, but implies
-  any radio).
+- **Station identifiers in radio-browser:** `stationuuid` is the only stable one, the same on every
+  mirror. `changeuuid` changes with every edit of the station; the old numeric `id` is deprecated
+  and differs between servers; there is no slug, and names are neither unique nor stable.
+
+## Open questions
+
+- **A human-readable hint in the URI?** A bare UUID is unreadable in logs and in `multiroom.yml`.
+  Option: accept and ignore a trailing label, e.g. `radiobrowser://<uuid>#radio-roks`, which the
+  resolver strips. Decide in the spec; the resolved title already names the input in clients.
