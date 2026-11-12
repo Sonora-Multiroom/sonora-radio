@@ -34,8 +34,11 @@ The extension, with one feature: a URI scheme that names a station.
 - **A `RadioBrowserClient`**: lazy server discovery (DNS `all.api.radio-browser.info`, shuffled,
   fail over to the next server; `/json/servers` as fallback), `User-Agent: sonora-radio/<version>`,
   short connect and read timeouts, never called during bean construction.
-- **The display name** of the resulting input is the station's name (bounded length), so clients
-  show "Radio ROKS", not a UUID.
+- **The display name** comes from the hub: the resolver puts the station's name (bounded length) in
+  `ResolvedInputEndpoint.title` (API 0.1.28), and core's `ResolvedInputNamer` names an input whose
+  name the caller did not supply, so clients show "Radio ROKS", not a UUID.
+- **Refresh mode** `EndpointRefreshMode.RE_RESOLVE_ORIGINAL_INPUT`, as the SoundCloud and YouTube
+  resolvers use, so the hub resolves the station again when its stream URL is refused.
 - **Configuration** under `multiroom.radio.*`: `enabled`, `user-agent` override, timeouts, optional
   fixed server list (for tests and outages).
 - **Metrics**: resolutions by outcome and by server, behind a `RadioMetrics` interface as in
@@ -63,15 +66,23 @@ volume, stop the test route first, a known-good station (KissFM, Kraina FM, Radi
 
 ## Open questions
 
-- **Does the runtime path accept an unknown scheme?** `multiroom-core`'s `ConfigurationValidator`
-  allows only `file`, `http`, `https`, `alsa`, `direct-sound`, `wasapi` and `signal` in
-  `multiroom.yml`, so a `radiobrowser://` input cannot be configured there today. TTS registers its
-  `tts://` inputs through `multiroom-api`, not REST. Check that `POST /api/v2/play` passes the URI
-  to the resolvers untouched; if not, that is a hub change (`sonora-multiroom` backlog). Allowing
-  resolver schemes in `multiroom.yml` would also be a hub change.
-- **When does the hub resolve**: once at registration, or at every route start and reconnect? The
-  hub backlog has `resolve-before-register.md` and `re-resolve-on-reconnect-failure.md`. A station
-  that moved its stream is only repaired if the hub resolves again after a failure.
+- **Runtime path: answered 2026-11-13, no hub change needed** (read in `sonora-multiroom` master,
+  API 0.1.33). `POST /api/v2/play` checks only that `uri` is not blank (`PlaybackRequest`);
+  `DeviceRegistryServiceImpl.registerInput` checks no scheme; route creation calls
+  `InputHandlerRegistry.resolveInput`, and `DefaultInputResolutionService` offers the URI to each
+  resolver's `supports` in order, falling back to passthrough (which then fails with
+  `UnsupportedSchemeException` when the extension is not loaded). `POST /api/v2/inputs` takes the
+  same path when a route starts. The REST layer reports such an input as not pauseable, which is
+  right for live radio.
+- **`multiroom.yml` still refuses the scheme:** `ConfigurationValidator` allows only `file`,
+  `http`, `https`, `alsa`, `direct-sound`, `wasapi` and `signal`. A configured station input would
+  need a hub change, proposed as `sonora-multiroom/docs/backlog/resolver-schemes-in-config.md` and
+  followed up here in [configured-station-inputs.md](configured-station-inputs.md); not needed for
+  this item.
+- **When the hub resolves:** at route creation, not at registration, so an input registered with
+  `POST /api/v2/inputs` costs no radio-browser call until it plays. It resolves again on expiry and
+  on a refused link (HUB-038); after other reconnect failures it does not yet (hub backlog
+  `re-resolve-on-reconnect-failure.md`), so a station whose stream host vanished ends its route.
 - **Should a resolve count a click every time?** One play can resolve several times (reconnects).
   The service counts one click per IP per station per day anyway, so probably harmless; confirm.
 - **HLS stations** (`hls = 1`): does the hub play them reliably (see hub backlog
