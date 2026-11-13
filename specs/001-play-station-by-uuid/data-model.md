@@ -95,6 +95,13 @@ States: **empty** (nothing discovered yet; the first play discovers) → **fresh
 on the next play) → **fresh**. Held in an `AtomicReference`; replaced whole, never locked across a
 network call. A pinned list is always fresh.
 
+## StationCache (cached state)
+
+Held by `CachingRadioBrowserClient`: UUID → (`Station`, stored-at instant). An entry is used while
+younger than `station-cache-ttl`; at `station-cache-size` entries the oldest is dropped. Only found
+stations are stored. Play reports are never stored or answered from it. Concurrent map, no lock held
+across a network call.
+
 ## RadioProperties (`multiroom.radio.*`)
 
 Full table with defaults and validation in [contracts/configuration.md](contracts/configuration.md).

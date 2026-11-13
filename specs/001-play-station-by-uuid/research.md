@@ -188,8 +188,14 @@ radio-browser.info was **not** contacted (constitution XII); its facts come from
 - **No REST API and no `@RestControllerAdvice`**: errors travel as `InputResolutionException`
   through the hub's own handler. Search (`station-search-api.md`) brings the first controller and
   its scoped advice.
-- **No cache of station lookups for play**: every play must be reported to the catalogue, and the
-  lookup is one small request. A lookup cache arrives with search, where it pays off.
+- **Station lookups are cached, play reports are not** (constitution IX): a
+  `CachingRadioBrowserClient` decorates `RadioBrowserClient` and keeps the result of `station(uuid)`
+  (name, codec, HLS flag, stream address) for `station-cache-ttl` (default 5 min), at most
+  `station-cache-size` entries (default 100, oldest dropped first). Only found stations are cached,
+  never an empty answer or a failure. `reportPlay` always goes to the catalogue, so every play,
+  re-lookups after a refused address included, is still counted. The cached fields only decide the
+  codec/HLS checks, the title and the fallback address; the address that plays comes from the play
+  report. Search later reuses the same decorator.
 - **No hub change**: confirmed in the backlog's findings and in R1.
 
 ## R14. Build and project skeleton

@@ -177,8 +177,8 @@ the hub starts and lists the extension as disabled.
 - **FR-005**: To resolve a station the extension MUST use the catalogue's play-counting station URL
   lookup, so that every play (re-lookups included) is reported to the catalogue; it MUST NOT report
   a play for anything other than resolving a station for playback.
-- **FR-006**: If the play-counting lookup fails, the extension MUST fall back to the plain station
-  lookup and use the station's already-resolved stream address.
+- **FR-006**: If the play report fails, the extension MUST play the stream address from the station
+  lookup it already made.
 - **FR-007**: The extension MUST hand the hub only an `http` or `https` stream address and refuse
   any other scheme with an error naming the station UUID.
 - **FR-008**: The extension MUST offer the station's name to the hub as the resolved input's title,
@@ -295,7 +295,7 @@ Kraina FM, Radio NV).
   names an input with it when the client gave none.
 - **Codec support is the hub's own list** (today mp3, aac, opus, webm, ogg_vorbis, wav, flac); the
   extension asks the hub rather than keeping a copy.
-- **Default limits** (tunable): about 2 s to connect and 5 s to read per request, at most 3 servers
+- **Default limits** (tunable): about 2 s to connect and 4 s to read per request, at most 3 servers
   per play; together these keep a failing play under the 15 s in SC-003.
 - **Name length is the hub's call**: the hub cuts a resolved title to its own display limit (64
   characters at API 0.1.33, which the owner may raise). The extension's safety limit (256

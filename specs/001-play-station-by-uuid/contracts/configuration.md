@@ -16,6 +16,8 @@ a rule fails hub start-up with a message naming `multiroom.radio` and the proper
 | `discovery-host` | host name | `all.api.radio-browser.info` | A plain host name (no scheme, port or path) |
 | `discovery-timeout` | duration | `3s` | Positive |
 | `server-list-ttl` | duration | `1h` | Positive |
+| `station-cache-ttl` | duration | `5m` | Positive. How long a found station's lookup is reused; play reports are never cached |
+| `station-cache-size` | integer | `100` | 1–10000. Oldest entry dropped first |
 | `allow-hls` | boolean | `true` | `false` refuses stations marked HLS |
 
 ## Example

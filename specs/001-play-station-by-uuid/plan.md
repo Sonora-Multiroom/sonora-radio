@@ -55,9 +55,9 @@ contact radio-browser.info or real DNS
 | VI Git | Branch `001-play-station-by-uuid`; Conventional Commits; PR; tag `v0.1.0` after merge |
 | VII Cross-platform | JDK DNS through an interface, bounded by a timeout; HTTPS by host name only, never bare IP; UUIDs in lower case |
 | VIII Extension boundary | `multiroom-api` only; entry point in `AutoConfiguration.imports`; no root config file (version file lives under `multiroom/radio/`); `radio` everywhere; lazy discovery; malformed config fails start-up; resolver returns only `http(s)`; `enabled=false` contributes nothing. No REST API, so no `@RestControllerAdvice` is needed yet |
-| IX Good citizen | `sonora-radio/<version>` UA with nothing about the home; discovery, shuffle, failover; no hard-coded mirror; play reported only on resolve and only after the station passed the checks; no polling or scheduled refresh. No list or search requests, so no `limit` applies yet |
+| IX Good citizen | `sonora-radio/<version>` UA with nothing about the home; discovery, shuffle, failover; no hard-coded mirror; play reported only on resolve and only after the station passed the checks; no polling or scheduled refresh; station lookups cached briefly with a size bound (`CachingRadioBrowserClient`, R13) while the play is still reported every time. No list or search requests, so no `limit` applies yet |
 | X Untrusted catalogue | UUID validated before any request; stream address must be `http(s)`; name stripped of control characters and bounded at 256 code points; names never in tags or logs; tolerant `JsonNode` mapping |
-| XI Hub keeps working | Per-request timeouts plus a per-resolve deadline; bounded server count; `UPSTREAM_UNAVAILABLE` on outage; no shared lock across I/O; discovery on a bounded executor |
+| XI Hub keeps working | Per-request timeouts plus a per-resolve deadline; bounded server count; `UPSTREAM_UNAVAILABLE` on outage; no shared lock across I/O; discovery on a bounded, cached-pool executor (a stuck lookup never queues the next one) |
 | XII No live service in tests | WireMock and injected DNS only; live checks once, by hand, recorded in `verification.md` |
 
 No violations; Complexity Tracking is empty.
@@ -99,6 +99,7 @@ src/main/java/multiroom/radio/
 ├── catalogue/
 │   ├── RadioBrowserClient.java           # interface: station(uuid), reportPlay(uuid)
 │   ├── HttpRadioBrowserClient.java       # JDK HttpClient, failover, deadline
+│   ├── CachingRadioBrowserClient.java    # decorator: bounded TTL cache of station(); reportPlay never cached
 │   ├── Station.java, PlayReport.java     # records mapped from JsonNode
 │   ├── Deadline.java                     # remaining-time arithmetic
 │   ├── CatalogueUnavailableException.java
