@@ -1,0 +1,271 @@
+---
+
+description: "Task list for RADIO-001: play a station by its UUID"
+---
+
+# Tasks: Play a station by its UUID (RADIO-001)
+
+**Input**: Design documents from `specs/001-play-station-by-uuid/`
+
+**Prerequisites**: [plan.md](plan.md), [spec.md](spec.md), [research.md](research.md),
+[data-model.md](data-model.md), [contracts/](contracts/), [quickstart.md](quickstart.md)
+
+**Tests**: Required. The constitution (III) mandates test-first: write each test task, run it and
+see it fail, then implement. Tests use WireMock and an injected `DnsResolver`; nothing contacts
+radio-browser.info or real DNS (XII). Timeout tests use configured timeouts of a few hundred
+milliseconds, never seconds.
+
+**Organization**: by user story (spec.md), so each story is testable on its own.
+
+## Format: `[ID] [P?] [Story] Description`
+
+- **[P]**: can run in parallel (different files, no dependency on an unfinished task)
+- **[Story]**: US1–US4 from spec.md
+- Paths are relative to the repository root. `main/` = `src/main/java/multiroom/radio/`,
+  `test/` = `src/test/java/multiroom/radio/`, `fixtures/` = `src/test/resources/radiobrowser/`.
+  Each task names the full path anyway.
+
+## Reference while implementing
+
+- Hub API (read-only): `D:\projects-sonora\sonora-multiroom\multiroom-api\src\main\java\multiroom\api\io\resolve\`
+  (`InputEndpointResolver`, `ResolvedInputEndpoint`, `EndpointRefreshMode`,
+  `InputResolutionException`, `InputResolutionFailure`, `SupportedCodecRegistry`) and
+  `multiroom\api\model\AudioInputDefinition`.
+- Model extension: `D:\projects-sonora\sonora-tts` (`pom.xml`, `TtsAutoConfiguration`,
+  `TtsInputResolver`, `metrics/`).
+- Failure codes per case: research.md R2. Call order: R3. Title rules: R4. Codec map: R5.
+  Discovery and failover: R7. Time budget: R8.
+
+---
+
+## Phase 1: Setup (Shared Infrastructure)
+
+**Purpose**: a building, empty extension JAR that passes the inherited gates.
+
+- [ ] T001 Create `pom.xml` copying `D:\projects-sonora\sonora-tts\pom.xml`'s shape: parent `ai.multiroom:multiroom-extension-starter:0.1.33` with empty `<relativePath/>`; `artifactId` `multiroom-radio`, `version` `0.1.0`, `name` `multiroom-radio`, description "radio-browser.info stations for the multiroom audio hub"; properties `extension.name` = `Radio Extension`, `extension.id` = `radio` (with the comment on why it is not derived from the artifact id), `multiroom.require_api_version` = `0.1.33`, `skip.wagon.upload` = `false`, `multiroom.local-extensions-dir` = `D:/projects-sonora/sonora-multiroom/extensions`; `provided` dependencies `spring-boot-starter`, `spring-boot-starter-validation`, `jackson-databind`, `micrometer-core`; optional provided `spring-boot-configuration-processor`; test dependencies `spring-boot-starter-test`, `micrometer-registry-prometheus`, `org.wiremock:wiremock-standalone:3.9.2`; JaCoCo 0.8.14 with the 80% BUNDLE LINE `check` in `verify`; the `local` profile override copying to `${multiroom.local-extensions-dir}/${project.artifactId}.jar`
+- [ ] T002 In `pom.xml`, enable resource filtering **only** for `src/main/resources/multiroom/radio/radio-version.properties` (one filtered `<resource>` with an include, one unfiltered for everything else), and create that file with the single line `version=${project.version}`
+- [ ] T003 [P] Create `src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` containing `multiroom.radio.RadioAutoConfiguration`
+- [ ] T004 [P] Create `src/main/java/multiroom/radio/RadioAutoConfiguration.java`: `@AutoConfiguration`, `@ConditionalOnProperty(name = "multiroom.radio.enabled", havingValue = "true", matchIfMissing = true)`, no beans yet; class Javadoc as in `TtsAutoConfiguration` (entry point named by the imports file; core knows nothing of this module)
+- [ ] T005 Run `mvn verify > "$TEMP/radio-verify.log" 2>&1; echo $?` and confirm exit 0 apart from the JaCoCo gate (no code to cover yet: temporarily acceptable), that the enforcer passes, and that `target/multiroom-radio-0.1.0.jar`'s manifest has `Extension-Id: radio`, `Extension-Version: 0.1.0`, `Require-API-Version: [0.1.33,0.2.0)`
+
+**Checkpoint**: the JAR builds; the hub would load it and contribute nothing.
+
+---
+
+## Phase 2: Foundational (Blocking Prerequisites)
+
+**Purpose**: configuration, version, time budget, catalogue types and the metrics seam that every
+story uses.
+
+**⚠️ CRITICAL**: no user story work begins until this phase is complete.
+
+### Tests (write first, see them fail)
+
+- [ ] T006 [P] Write `src/test/java/multiroom/radio/config/RadioPropertiesTest.java` (bind with `Binder` over a `MapConfigurationPropertySource` plus a `Validator`): defaults are `enabled` true, `user-agent` null (meaning "sonora-radio/<version>"), `connect-timeout` 2s, `read-timeout` 4s, `resolve-timeout` 10s, `max-servers-per-request` 3, `servers` empty, `discovery-host` `all.api.radio-browser.info`, `discovery-timeout` 3s, `server-list-ttl` 1h, `allow-hls` true. Each rule fails with a message naming the property: timeouts "Positive"; `resolve-timeout` "at least `connect-timeout`"; `max-servers-per-request` "1–10"; `server-list-ttl` "Positive"; each `servers` entry "an absolute `http`/`https` URL with a host, no path beyond `/`, no query or fragment"; `discovery-host` "a plain host name (no scheme, port or path)"; `user-agent` "Not blank, no CR or LF, at most 200 characters"
+- [ ] T007 [P] Write `src/test/java/multiroom/radio/RadioVersionTest.java`: the version read from `multiroom/radio/radio-version.properties` is non-blank and not the literal `${project.version}`; the default user agent is `sonora-radio/` + that version; a missing resource yields `sonora-radio/unknown` rather than an exception
+- [ ] T008 [P] Write `src/test/java/multiroom/radio/catalogue/DeadlineTest.java` against an injected `java.time.Clock`: `remaining()` shrinks with the clock, never goes negative; `expired()`; `cap(Duration)` returns the smaller of the argument and what remains
+
+### Implementation
+
+- [ ] T009 Implement `src/main/java/multiroom/radio/config/RadioProperties.java`: `@ConfigurationProperties("multiroom.radio")`, `@Validated`, fields and defaults per [contracts/configuration.md](contracts/configuration.md) as field initialisers (no `application.yml`), validation per T006 (JSR-380 annotations plus an `@AssertTrue`-style cross-check or `InitializingBean`-free explicit checks), `servers` as `List<URI>`; Javadoc on every property
+- [ ] T010 [P] Implement `src/main/java/multiroom/radio/RadioVersion.java`: loads `radio-version.properties` through `RadioVersion.class.getResourceAsStream("radio-version.properties")` (package-relative, never the classpath root) and exposes `version()` and `defaultUserAgent()`
+- [ ] T011 [P] Implement `src/main/java/multiroom/radio/catalogue/Deadline.java` (record over a `Clock` and an end `Instant`)
+- [ ] T012 [P] Create the catalogue types in `src/main/java/multiroom/radio/catalogue/`: `Station.java` (record `uuid`, `name`, `streamUrl`, `codecLabel`, `hls`), `PlayReport.java` (record `ok`, `url`), `CatalogueUnavailableException.java` (no server answered; carries the servers tried), `CatalogueProtocolException.java` (unreadable answer), and the interface `RadioBrowserClient.java` with `Optional<Station> station(UUID uuid, Deadline deadline)` and `PlayReport reportPlay(UUID uuid, Deadline deadline)`; both throw only the two exceptions above
+- [ ] T013 [P] Create `src/main/java/multiroom/radio/catalogue/servers/CatalogueServer.java` (record `baseUri`, `tag` = host, plus `:port` when not the scheme's default) and the interfaces `ServerSource.java` (`List<CatalogueServer> servers(Deadline)`, `void answered(CatalogueServer)`, `void allFailed()`) and `DnsResolver.java` (`List<InetAddress> lookup(String host)`, `Optional<String> reverse(InetAddress address)`)
+- [ ] T014 [P] Create `src/main/java/multiroom/radio/metrics/RadioMetrics.java` (no Micrometer types; methods `resolution(String outcome, String serverTag, Duration elapsed)`, `catalogueRequest(String serverTag, String endpoint, String result)`, `discovery(String source, String result)`; tag constants for every closed set in [contracts/observability.md](contracts/observability.md); "no method throws") and `src/main/java/multiroom/radio/metrics/NoopRadioMetrics.java`
+- [ ] T015 Register in `src/main/java/multiroom/radio/RadioAutoConfiguration.java`: `@EnableConfigurationProperties(RadioProperties.class)` and a `NoopRadioMetrics` bean for now (the Micrometer one arrives in US4)
+
+**Checkpoint**: foundation ready; `mvn test` green for T006–T008.
+
+---
+
+## Phase 3: User Story 1 - Play a station by naming it (Priority: P1) 🎯 MVP
+
+**Goal**: `radiobrowser://<uuid>` plays through `POST /api/v2/play`, named after the station.
+
+**Independent Test**: with WireMock serving `byuuid` and `url` for one station on a pinned server,
+`RadioStationResolver.resolve` returns that station's `http(s)` address, title, and
+`RE_RESOLVE_ORIGINAL_INPUT`; live, quickstart part 2 step 3.
+
+### Tests for User Story 1 (write first, see them fail) ⚠️
+
+- [ ] T016 [P] [US1] Write `src/test/java/multiroom/radio/resolve/StationReferenceTest.java` for the accepted forms: `radiobrowser://<uuid>`, `radiobrowser://<uuid>/`, `radiobrowser://<uuid>#<label>`, upper- and mixed-case scheme and UUID; the parsed UUID is in canonical lower case; the label is held but irrelevant to equality
+- [ ] T017 [P] [US1] Write `src/test/java/multiroom/radio/resolve/StationTitleTest.java`: control characters, line and paragraph separators removed; whitespace runs collapsed to one space; trimmed; "cut at 256 code points (never inside a surrogate pair)"; blank → empty `Optional`; a 300-character name keeps exactly 256 code points; a name with HTML is kept as text (only bounded)
+- [ ] T018 [P] [US1] Write `src/test/java/multiroom/radio/resolve/StreamAddressTest.java` for the accepted side: `http` and `https` (any case) with a host parse to a `URI` unchanged
+- [ ] T019 [P] [US1] Create fixtures `src/test/resources/radiobrowser/station-mp3.json` (one-element array: `stationuuid`, `name` "Test FM", `url`, `url_resolved` `https://stream.example.test/live.mp3`, `codec` "MP3", `hls` 0, `lastcheckok` 1, plus a few unknown fields) and `src/test/resources/radiobrowser/url-ok.json` (`ok` true, `message`, `stationuuid`, `name`, `url` `https://stream.example.test/live-current.mp3`), shaped per [contracts/radio-browser-calls.md](contracts/radio-browser-calls.md)
+- [ ] T020 [P] [US1] Write `src/test/java/multiroom/radio/catalogue/HttpRadioBrowserClientTest.java` (WireMock, one server via a stub `ServerSource`): `station` requests `GET /json/stations/byuuid?uuids=<uuid>&hidebroken=false` and maps the fixture, preferring `url_resolved` over `url`; `reportPlay` requests `GET /json/url/<uuid>` and maps `ok`/`url`; every request carries `User-Agent` from properties (default `sonora-radio/<version>`) and `Accept: application/json`; unknown fields ignored; `[]` → empty `Optional`
+- [ ] T021 [P] [US1] Write `src/test/java/multiroom/radio/catalogue/servers/PinnedServerSourceTest.java`: returns the configured servers in the order given; never expires
+- [ ] T022 [P] [US1] Write `src/test/java/multiroom/radio/catalogue/servers/DiscoveredServerSourceTest.java` for the DNS path with a fake `DnsResolver`: forward lookup of `discovery-host`, reverse lookup of each address, keep names ending in `.api.radio-browser.info`, `https://<name>` each, shuffled (inject a `Random` with a seed to assert order); the result is cached and the second call makes no DNS lookup; the first lookup happens on the first `servers()` call, never at construction
+- [ ] T023 [US1] Write `src/test/java/multiroom/radio/resolve/RadioStationResolverTest.java` (mock `RadioBrowserClient`, stub `SupportedCodecRegistry` that supports everything): `supports` is true only for the `radiobrowser` scheme (any case) and false for `http`, `tts`, `soundcloud` URLs and null; `resolve` calls `station` then `reportPlay` in that order and returns `effectiveUri` = the play report's `url`, `headers` empty, `expiresAt` null, `refreshMode` `RE_RESOLVE_ORIGINAL_INPUT`, `resolverId` `radiobrowser`, `title` = cleaned name, `creator` null, `originalInput` the input given; `getOrder()` is 120; resolving the same input twice reports the play twice (re-lookup)
+
+### Implementation for User Story 1
+
+- [ ] T024 [P] [US1] Implement `src/main/java/multiroom/radio/resolve/StationReference.java` (record `uuid`, `label`; static `parse(String uri)` throwing `IllegalArgumentException` with a reason; strict 8-4-4-4-12 hex pattern; refusals are tested in US2 but the parser rejects everything outside the grammar in [contracts/station-uri.md](contracts/station-uri.md) from the start)
+- [ ] T025 [P] [US1] Implement `src/main/java/multiroom/radio/resolve/StationTitle.java` (static `of(String name)` → `Optional<String>`, rules per T017)
+- [ ] T026 [P] [US1] Implement `src/main/java/multiroom/radio/resolve/StreamAddress.java` (static `parse(String)` → `URI`; scheme `http`/`https` and a host required, else `IllegalArgumentException` naming the scheme only)
+- [ ] T027 [P] [US1] Implement `src/main/java/multiroom/radio/catalogue/servers/PinnedServerSource.java`
+- [ ] T028 [P] [US1] Implement `src/main/java/multiroom/radio/catalogue/servers/JdkDnsResolver.java` (`InetAddress.getAllByName`, `getCanonicalHostName`; a reverse lookup that returns the literal address counts as empty) and the DNS path of `src/main/java/multiroom/radio/catalogue/servers/DiscoveredServerSource.java` (cached list in an `AtomicReference`, no lock held across a lookup)
+- [ ] T029 [US1] Implement `src/main/java/multiroom/radio/catalogue/HttpRadioBrowserClient.java` for a single answering server: one `java.net.http.HttpClient` built lazily on first use (`Redirect.NORMAL`, HTTP/1.1, `connectTimeout` from properties); per-request timeout `deadline.cap(read-timeout)`; Jackson `ObjectMapper.readTree` and field-by-field mapping into `Station`/`PlayReport` (wrong-typed field = missing); DEBUG log of the request URL and `User-Agent`
+- [ ] T030 [US1] Implement `src/main/java/multiroom/radio/resolve/RadioStationResolver.java` (`InputEndpointResolver`): parse → `Deadline` of `resolve-timeout` → `station` → (codec/HLS hooks, filled in US2) → `reportPlay` → `StreamAddress.parse(url)` → `ResolvedInputEndpoint` per T023; INFO one line per resolution with UUID, outcome, answering server, elapsed ms (never the name or label)
+- [ ] T031 [US1] Wire beans in `src/main/java/multiroom/radio/RadioAutoConfiguration.java`: `ServerSource` (pinned when `servers` is non-empty, else discovered with `JdkDnsResolver`), `RadioBrowserClient`, `RadioStationResolver` (with `ObjectProvider<SupportedCodecRegistry>`); nothing in any constructor touches the network
+
+**Checkpoint**: US1 works with a healthy catalogue; `mvn verify` green.
+
+---
+
+## Phase 4: User Story 2 - A bad station fails clearly and leaves nothing behind (Priority: P1)
+
+**Goal**: every failure is an `InputResolutionException` with the right code and a message naming
+the station, so the hub answers 400/422/502/503 and removes its ephemeral input.
+
+**Independent Test**: each failure case in research.md R2 produces its failure code and message
+from `resolve`, refused stations make no `/json/url` request, and malformed input makes no request
+at all.
+
+### Tests for User Story 2 (write first, see them fail) ⚠️
+
+- [ ] T032 [P] [US2] Extend `src/test/java/multiroom/radio/resolve/StationReferenceTest.java` with the refused forms: empty authority, non-UUID authority (`radiobrowser://kissfm`), a path other than `/`, a query, user info, a port, a UUID with wrong group lengths or non-hex characters
+- [ ] T033 [P] [US2] Extend `src/test/java/multiroom/radio/resolve/StreamAddressTest.java` with refusals: `file:`, `jar:`, `alsa:`, `ftp:`, relative, no host, unparseable
+- [ ] T034 [P] [US2] Write `src/test/java/multiroom/radio/resolve/CodecPolicyTest.java`: labels trimmed and upper-cased; `MP3` → `mp3`, `AAC` and `AAC+` → `aac`, `OPUS` → `opus`, `FLAC` → `flac`; a mapped codec the stub registry rejects is refused; `OGG`, `UNKNOWN`, empty, null and any other label are allowed; no registry (empty `ObjectProvider`) → allowed
+- [ ] T035 [P] [US2] Create fixtures `src/test/resources/radiobrowser/station-empty.json` (`[]`), `station-hls.json` (`hls` 1, codec `AAC`), `station-file-url.json` (`url_resolved` `file:///etc/passwd`), `station-unknown-codec.json` (codec `UNKNOWN`), `station-malformed.json` (an object, not an array) and `url-not-ok.json` (`ok` false)
+- [ ] T036 [US2] Extend `src/test/java/multiroom/radio/resolve/RadioStationResolverTest.java` with the R2 table, asserting failure code and that the message names the UUID (or the malformed value truncated to 64 characters): malformed → `INVALID_INPUT`, no client call; unknown station → `INVALID_INPUT` with "not found in radio-browser"; codec refused → `UNSUPPORTED_RESOURCE` naming the label, **no `reportPlay`**; HLS with `allow-hls` false → `UNSUPPORTED_RESOURCE` naming "HLS", **no `reportPlay`**; HLS with `allow-hls` true → plays; non-HTTP play-report address → `UNSUPPORTED_RESOURCE` naming the scheme; `CatalogueUnavailableException` → `UPSTREAM_UNAVAILABLE` with "radio-browser unavailable"; `CatalogueProtocolException` from `station` → `UPSTREAM_PROTOCOL_ERROR`; any unexpected `RuntimeException` from a collaborator is wrapped as `UPSTREAM_PROTOCOL_ERROR` (never escapes raw)
+- [ ] T037 [P] [US2] Extend `src/test/java/multiroom/radio/catalogue/HttpRadioBrowserClientTest.java`: a non-array `byuuid` body → `CatalogueProtocolException`; an array whose entry's `stationuuid` differs from the request → empty; a 4xx other than 429 → `CatalogueProtocolException` without trying another server
+
+### Implementation for User Story 2
+
+- [ ] T038 [P] [US2] Implement `src/main/java/multiroom/radio/resolve/CodecPolicy.java` (constructor takes `ObjectProvider<SupportedCodecRegistry>`; `Optional<String> refusal(String codecLabel)` returns the label to name when refused)
+- [ ] T039 [US2] Complete `src/main/java/multiroom/radio/resolve/RadioStationResolver.java`: map every failure to `InputResolutionException` per research.md R2; codec and HLS checks before `reportPlay`; bound any catalogue text put in a message (codec label to 32 characters, control characters removed); catch-all wrap so nothing but `InputResolutionException` leaves `resolve`
+- [ ] T040 [US2] Wire `CodecPolicy` and `allow-hls` into the resolver bean in `src/main/java/multiroom/radio/RadioAutoConfiguration.java`
+
+**Checkpoint**: US1 and US2 green; every failure path ends in an `InputResolutionException`.
+
+---
+
+## Phase 5: User Story 3 - Playback survives catalogue and station trouble (Priority: P2)
+
+**Goal**: failover across mirrors inside the time budget, fallback when the play report fails, and
+discovery that recovers from DNS trouble.
+
+**Independent Test**: with WireMock servers that refuse, stall or answer 5xx ahead of a healthy
+one, a play succeeds through the healthy one; with all of them failing, `resolve` fails
+`UPSTREAM_UNAVAILABLE` within `resolve-timeout`.
+
+### Tests for User Story 3 (write first, see them fail) ⚠️
+
+- [ ] T041 [P] [US3] Extend `src/test/java/multiroom/radio/catalogue/HttpRadioBrowserClientTest.java` with several WireMock servers (or one server with per-path delays and a closed port): moves to the next server after a connect error, a timeout (`read-timeout` 200 ms against a 1 s delay), HTTP 5xx and HTTP 429; tries at most `max-servers-per-request`; stops when the `Deadline` expires and throws `CatalogueUnavailableException` listing the servers tried; tells the `ServerSource` which server `answered` and calls `allFailed` when none did
+- [ ] T042 [P] [US3] Extend `src/test/java/multiroom/radio/catalogue/servers/DiscoveredServerSourceTest.java`: no usable reverse names → `GET https://<discovery-host>/json/servers` (WireMock stands in; inject the base URI) and keep `name`s ending in `.api.radio-browser.info`; a DNS lookup slower than `discovery-timeout` (fake resolver that blocks) counts as no names; the list is discovered again after `server-list-ttl` (injected `Clock`) and after `allFailed()`; `answered(server)` rotates the list so the next request starts there; two concurrent first calls both complete without waiting on each other's lookup
+- [ ] T043 [P] [US3] Create fixture `src/test/resources/radiobrowser/servers.json` (three entries, one whose `name` is not under `.api.radio-browser.info`)
+- [ ] T044 [US3] Extend `src/test/java/multiroom/radio/resolve/RadioStationResolverTest.java`: `reportPlay` throwing `CatalogueUnavailableException` or returning `ok` false or no `url` → plays `Station.streamUrl` with outcome `fallback`; a fallback address that is not `http(s)` → `UNSUPPORTED_RESOURCE`; the `Deadline` given to both calls is the same one (one budget per resolution)
+
+### Implementation for User Story 3
+
+- [ ] T045 [US3] Add failover to `src/main/java/multiroom/radio/catalogue/HttpRadioBrowserClient.java` per [contracts/radio-browser-calls.md](contracts/radio-browser-calls.md) "Failover classification"; WARN on each server failure (server, endpoint, result); WARN once when none answered
+- [ ] T046 [US3] Complete `src/main/java/multiroom/radio/catalogue/servers/DiscoveredServerSource.java`: DNS on a small daemon executor awaited for at most `min(discovery-timeout, deadline.remaining())`; `/json/servers` fallback through the same `HttpClient` settings and `User-Agent`; TTL and stale-after-all-failed; rotation on `answered`; INFO when discovery completes (source, server count)
+- [ ] T047 [US3] Add the play-report fallback to `src/main/java/multiroom/radio/resolve/RadioStationResolver.java` (outcome `fallback`)
+
+**Checkpoint**: US1–US3 green; a stalled or dead mirror never fails a play while another answers.
+
+---
+
+## Phase 6: User Story 4 - The operator stays in control (Priority: P3)
+
+**Goal**: the switch-off flag, fail-fast configuration, no I/O at start-up, metrics and logs.
+
+**Independent Test**: `ApplicationContextRunner` shows no beans with `enabled=false`, zero WireMock
+requests during context start, and start-up failure for each malformed property; a
+`SimpleMeterRegistry` shows the meters with closed-set tags only.
+
+### Tests for User Story 4 (write first, see them fail) ⚠️
+
+- [ ] T048 [P] [US4] Write `src/test/java/multiroom/radio/RadioAutoConfigurationTest.java` (`ApplicationContextRunner` with `AutoConfigurations.of(RadioAutoConfiguration.class)`): default context has `RadioStationResolver`, `RadioBrowserClient`, `ServerSource`, `RadioMetrics`; `multiroom.radio.enabled=false` → none of them; with a WireMock server pinned, starting the context records zero requests; `servers[0]=not a url`, `connect-timeout=0s`, `max-servers-per-request=11` each fail start-up with a message containing `multiroom.radio` and the property; without a `MeterRegistry` bean → `NoopRadioMetrics`; with `SimpleMeterRegistry` → `MicrometerRadioMetrics`; with `FilteredClassLoader(MeterRegistry.class)` the context still starts with the no-op
+- [ ] T049 [P] [US4] Write `src/test/java/multiroom/radio/metrics/MicrometerRadioMetricsTest.java`: `radio.resolutions` (tags `outcome`, `server`), `radio.resolution.duration` (`outcome`), `radio.catalogue.requests` (`server`, `endpoint`, `result`), `radio.discoveries` (`source`, `result`); a tag value outside its closed set is recorded as `unknown` rather than passed through; Prometheus names (`radio_resolutions_total` …) checked with `PrometheusMeterRegistry`; no method throws when the registry does
+- [ ] T050 [US4] Extend `src/test/java/multiroom/radio/resolve/RadioStationResolverTest.java` and `src/test/java/multiroom/radio/catalogue/HttpRadioBrowserClientTest.java` with a recording `RadioMetrics` fake: one `resolution` per `resolve` with the right outcome and server tag; one `catalogueRequest` per HTTP attempt; no station name, UUID or codec label ever passed as a tag; a log-capturing appender shows the INFO resolution line contains the UUID and never the station name or `#label`
+
+### Implementation for User Story 4
+
+- [ ] T051 [P] [US4] Implement `src/main/java/multiroom/radio/metrics/MicrometerRadioMetrics.java` (only class importing Micrometer; guards every call)
+- [ ] T052 [US4] In `src/main/java/multiroom/radio/RadioAutoConfiguration.java` replace the T015 no-op bean with the two nested configurations copied from `TtsAutoConfiguration` (`@ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")` using `ObjectProvider<MeterRegistry>`, and `@ConditionalOnMissingClass` with the no-op)
+- [ ] T053 [US4] Record metrics in `src/main/java/multiroom/radio/resolve/RadioStationResolver.java`, `src/main/java/multiroom/radio/catalogue/HttpRadioBrowserClient.java` and `src/main/java/multiroom/radio/catalogue/servers/DiscoveredServerSource.java` per [contracts/observability.md](contracts/observability.md)
+
+**Checkpoint**: all four stories green offline.
+
+---
+
+## Phase 7: Polish, gates and live verification
+
+- [ ] T054 [P] Rewrite `README.md`: what the extension does, the URI grammar, configuration table (link the contract), build and deploy (`-Plocal` while developing; a bare `mvn deploy` uploads to production)
+- [ ] T055 [P] Update `AGENTS.md`: the extension now has code (drop "planned, no code yet"), package layout from plan.md, the decision that core owns the display length of titles (R4), and that `/json/url` is called only after the codec and HLS checks (R3)
+- [ ] T056 [P] Add `.github/workflows/test.yml` modelled on `D:\projects-sonora\sonora-tts\.github\workflows\test.yml` only if it can resolve `ai.multiroom:*` there; otherwise skip and note why in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T057 Run `mvn verify > "$TEMP/radio-verify.log" 2>&1; echo $?` (read the build's own exit code); confirm exit 0, JaCoCo ≥ 80%, test count; check `git ls-files --eol` shows no `w/crlf`; record command, date and counts in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T058 Run quickstart part 1's JAR inspection (manifest entries; no root `application.yml`/`.properties`; no `org/springframework`, `com/fasterxml` or `io/micrometer` classes shaded in) and record it in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T059 Optional (constitution V, recommended): run SpotBugs on the module with the upstream noise filter (`EI_EXPOSE_REP`, `EI_EXPOSE_REP2`, `CT_CONSTRUCTOR_THROW`, `RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE`); fix or justify findings in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T060 **Ask the owner first.** Deploy (`mvn deploy`) and restart `multiroom.service`; check acceptance 1 (inventory, then `enabled: false` and restore) per [quickstart.md](quickstart.md) part 2 steps 1–2; record in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T061 **Ask the owner first** (audible). Record the `office` volume, mute and master mute; run acceptance 2–7 per quickstart part 2 steps 3–8 at low volume, stopping each test route before the next step; if HLS fails, set the `allow-hls` default to `false` in `src/main/java/multiroom/radio/config/RadioProperties.java`, update `contracts/configuration.md`, and record the evidence; record everything in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T062 Acceptance 8 (clean-up): no ALSA playback device open, `audio.output.routes` for `office` reads 0, `office` volume and mute restored, any test configuration in `/home/tiger/multiroom.yml` reverted (restart with permission); record in `specs/001-play-station-by-uuid/verification.md`
+- [ ] T063 After merge: delete `docs/backlog/play-station-by-uuid.md`, remove its row from `docs/backlog/INDEX.md` and update `station-search-api.md`'s "Depends on" (the client now exists); tag `v0.1.0`
+
+---
+
+## Dependencies & Execution Order
+
+### Phase dependencies
+
+- **Setup (1)** → **Foundational (2)** → user stories.
+- **US1 (3)** needs Foundational. **US2 (4)** builds on US1's resolver and parser (same files).
+  **US3 (5)** builds on US1's client and server source. **US4 (6)** needs the beans from US1–US3 to
+  record into; its auto-configuration tests can start once US1 is wired.
+- **Polish (7)**: T054–T059 after US4; T060–T062 in order, each with permission; T063 after merge.
+
+### Within each story
+
+Tests first and failing → value types → collaborators → resolver → wiring.
+
+### Parallel opportunities
+
+- T003 ∥ T004 (Setup).
+- T006 ∥ T007 ∥ T008; then T010 ∥ T011 ∥ T012 ∥ T013 ∥ T014 (Foundational).
+- US1 tests T016–T022 together; then T024–T028 together.
+- US2 tests T032–T035, T037 together; T038 alongside.
+- US3 tests T041–T043 together.
+- US4 tests T048 ∥ T049; T051 alongside.
+- T054 ∥ T055 ∥ T056.
+
+## Parallel Example: User Story 1
+
+```text
+Task: "T016 StationReferenceTest (accepted forms)"
+Task: "T017 StationTitleTest"
+Task: "T018 StreamAddressTest (accepted)"
+Task: "T020 HttpRadioBrowserClientTest (single server)"
+Task: "T022 DiscoveredServerSourceTest (DNS path)"
+# then
+Task: "T024 StationReference"   Task: "T025 StationTitle"   Task: "T026 StreamAddress"
+Task: "T027 PinnedServerSource" Task: "T028 JdkDnsResolver + DiscoveredServerSource (DNS)"
+```
+
+---
+
+## Implementation Strategy
+
+### MVP (US1 + US2)
+
+US1 alone plays a station, but US2 is also P1: without it a wrong UUID can leave inputs behind on
+the owner's real system. Deliver both before any live deployment; verify offline, then run T060
+and acceptance 2–3.
+
+### Incremental delivery
+
+1. Setup + Foundational → empty extension that loads.
+2. US1 + US2 → MVP: plays stations, fails cleanly.
+3. US3 → resilient to mirror outages; acceptance 7.
+4. US4 → operator controls and metrics; acceptance 1 and 4.
+5. Polish and the remaining live checks.
+
+---
+
+## Notes
+
+- Never cite `FR-`, `SC-` or `US` numbers in code comments; `RADIO-001` and `HUB-NNN` are fine.
+- Commit after each task or logical group (Conventional Commits, explaining why).
+- Mark tasks `[X]` as they are done.
+- Live steps (T060–T062) need the owner's permission each time and follow the parent `AGENTS.md`.
