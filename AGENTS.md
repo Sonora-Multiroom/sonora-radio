@@ -2,9 +2,11 @@
 
 ## What this repository is
 
-**One Multiroom Audio Hub extension** (planned, no code yet): a drop-in JAR that lets the hub play
-internet radio stations from the [radio-browser.info](https://www.radio-browser.info/) catalogue by
-their station UUID, and lets clients search that catalogue through the hub.
+**One Multiroom Audio Hub extension**: a drop-in JAR that lets the hub play internet radio stations
+from the [radio-browser.info](https://www.radio-browser.info/) catalogue by their station UUID
+(`radiobrowser://<uuid>`, RADIO-001, implemented and verified offline; live verification is
+pending the owner's permission), and, still planned, lets clients search that catalogue through the
+hub.
 
 - **Language**: Java 17 LTS
 - **Framework**: Spring Boot, **supplied by the host, never bundled** (every Spring dependency is
@@ -16,6 +18,32 @@ their station UUID, and lets clients search that catalogue through the hub.
 The layout, the build and the extension contract follow the sibling `sonora-tts`, the first
 out-of-tree extension. Copy its structure (POM, auto-configuration entry point, scoped exception
 handler, metrics interface) rather than inventing a new one.
+
+### Package layout (`src/main/java/multiroom/radio/`)
+
+- `RadioAutoConfiguration`, `RadioVersion`: entry point and the version read from the filtered
+  `multiroom/radio/radio-version.properties`.
+- `config/RadioProperties`: `multiroom.radio.*`, validated, defaults in field initialisers.
+- `resolve/`: `RadioStationResolver` (the `InputEndpointResolver`), `StationReference` (URI
+  parsing), `CodecPolicy`, `StationTitle`, `StreamAddress`. Depends on `catalogue` only through
+  `RadioBrowserClient`.
+- `catalogue/`: `RadioBrowserClient` and its `HttpRadioBrowserClient` (failover, tolerant JSON
+  mapping), `CachingRadioBrowserClient` (short station cache), `CatalogueHttp` (the one transport),
+  `Deadline`; `catalogue/servers/`: pinned or DNS/`/json/servers` discovered mirror list.
+- `metrics/`: `RadioMetrics` with Micrometer and no-op implementations.
+
+Decisions worth knowing before changing the resolver (reasoning in
+`specs/001-play-station-by-uuid/research.md`):
+
+- **Core owns the display length of titles** (R4). The resolver only strips control characters and
+  bounds the station name at 256 code points; do not shorten it to the hub's display limit here.
+- **`/json/url` is called only after the codec and HLS checks** (R3), so a refused station is never
+  counted as played. If the play report fails, the address from the lookup is played, looked up
+  afresh when the lookup came from the cache.
+- **Only `InputResolutionException` may leave `resolve`**: the hub removes the ephemeral input it
+  created only for that exception.
+- **Every network wait is bounded by awaiting the attempt against a `Deadline`** (R8), including a
+  body that stalls after the headers; DNS runs off the calling thread.
 
 ### Why an extension, and not core or a client
 
@@ -117,8 +145,8 @@ inherited from the starter: use `-Plocal` while developing.
 - **Spec Kit** 1.4.0 (integration `claude`, scripts `ps`), set up 2026-11-13 with the `agent-context`,
   `archive`, `git` and `bug` extensions. Read `.specify/memory/constitution.md` (v1.0.0, ratified
   2026-11-13) before planning.
-  Lookup order: `specs/NNN-*/` → `.specify/memory/` → `.specify/archive/`. No feature exists yet;
-  the backlog is the only design record.
+  Lookup order: `specs/NNN-*/` → `.specify/memory/` → `.specify/archive/`. RADIO-001 (`specs/001-play-station-by-uuid/`) is the one
+  feature so far; the backlog holds the rest.
 - **Backlog** in `docs/backlog/`: one Markdown file per proposal with a header block (`Status`,
   `Origin`, `Depends on`, `Effort`) and Problem, Proposal, Acceptance (live) and Open questions
   sections. Acceptance (live) lists the one-time manual checks against the real hub and

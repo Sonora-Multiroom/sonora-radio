@@ -27,11 +27,18 @@ scheme, exactly as for any unknown scheme today.
 
 ## Results
 
-| Case | HTTP (hub REST v2) | Problem detail mentions |
+On `POST /api/v2/play` the hub answers **every** failure below with 422 "Route Error" (it wraps the
+resolver's exception while creating the route; the settled design is in the hub's
+`resolve-before-register.md`), and the problem detail says only "Failed to create route…". The
+columns show what the resolver reports: the failure code (and the status the hub's own handler gives
+that code, where the exception reaches it unwrapped) and the message, which is in the hub log.
+Surfacing it to clients is the hub backlog item `play-resolution-failure-reason.md`.
+
+| Case | Hub status for the code | Resolver message mentions |
 |---|---|---|
 | Station plays | 2xx, as for any play | — ; the input is named after the station when the client gave no name |
-| Malformed URI or UUID | 400 | the value (truncated to 64 characters) |
-| Unknown station | 400 | `radiobrowser://<uuid>` and "not found in radio-browser" |
+| Malformed URI or UUID | 400 (play: 422) | the value (truncated to 64 characters) |
+| Unknown station | 400 (play: 422) | `radiobrowser://<uuid>` and "not found in radio-browser" |
 | Codec known and not decodable | 422 | the UUID and the codec label |
 | HLS switched off and station is HLS | 422 | the UUID and "HLS" |
 | Catalogue gives a non-HTTP stream address | 422 | the UUID and the address's scheme |
@@ -53,8 +60,8 @@ during that re-lookup is retried by the hub with its backoff; an unknown station
 radiobrowser://960e57c5-0601-11e8-ae97-52543be04c81
 radiobrowser://960E57C5-0601-11E8-AE97-52543BE04C81          same station
 radiobrowser://960e57c5-0601-11e8-ae97-52543be04c81#kissfm   same station, readable
-radiobrowser://kissfm                                         400, not a UUID
-radiobrowser://960e57c5-0601-11e8-ae97-52543be04c81?x=1       400, query not allowed
+radiobrowser://kissfm                                         refused, not a UUID
+radiobrowser://960e57c5-0601-11e8-ae97-52543be04c81?x=1       refused, query not allowed
 ```
 
 (The UUIDs above are illustrative.)

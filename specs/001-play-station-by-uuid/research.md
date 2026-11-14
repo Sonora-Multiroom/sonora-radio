@@ -16,7 +16,10 @@ radio-browser.info was **not** contacted (constitution XII); its facts come from
   Any other exception reaches the generic 500 handler and **leaves the input behind**, which would
   break the spec's "nothing left behind". `V2ExceptionHandler` maps the failure code to the HTTP
   status: `INVALID_INPUT` 400; `UNSUPPORTED_RESOURCE`, `PRIVATE_RESOURCE`, `BLOCKED_RESOURCE` 422;
-  `UPSTREAM_AUTH_FAILED`, `UPSTREAM_PROTOCOL_ERROR` 502; `UPSTREAM_UNAVAILABLE` 503.
+  `UPSTREAM_AUTH_FAILED`, `UPSTREAM_PROTOCOL_ERROR` 502; `UPSTREAM_UNAVAILABLE` 503. **Correction
+  (2026-11-14, local and production runs):** that mapping applies only where the exception reaches the
+  handler unwrapped. On `POST /api/v2/play` core wraps it in a `RouteException` and the answer is 422
+  for every code, by the hub's settled design; the code and message are in the log.
 - **`supports` never throws and never touches the network**: since HUB-039 the hub also calls it
   at start-up (`ConfiguredInputs` → `InputResolutionService.handles`) for every configured input,
   and the API's Javadoc asks for it to be cheap and side-effect-free. It only compares the URI's
