@@ -13,7 +13,6 @@ update this list.
 
 | Priority | Item | Kind | Effort | Why this priority |
 |---|---|---|---|---|
-| P3 | [Play a station by its UUID](play-station-by-uuid.md) | Feature | Medium | The first feature: the extension skeleton and the `radiobrowser://` resolver. Every other item builds on it |
-| P3 | [Search the catalogue through the hub](station-search-api.md) | Feature | Medium | What makes the catalogue usable from the CLI, MCP and the app; needs the client in the item above |
+| P3 | [Search the catalogue through the hub](station-search-api.md) | Feature | Medium | What makes the catalogue usable from the CLI, MCP and the app; needs the client RADIO-001 shipped |
 | P4 | [Favourite stations](favourite-stations.md) | Feature | Medium | Clients can keep favourites themselves until the hub has a persistence layer |
 | P4 | [Stations as configured inputs in `multiroom.yml`](configured-station-inputs.md) | Feature | Small (here) | No longer blocked (the hub accepts resolver schemes since HUB-039); what remains is documenting and verifying it. Runtime play covers the need until stations must survive a restart |

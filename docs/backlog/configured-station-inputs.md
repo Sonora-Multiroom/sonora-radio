@@ -8,7 +8,7 @@ but `multiroom.yml` refused any scheme outside core's own handlers. HUB-039 (no 
 `sonora-multiroom` master as read on 2026-11-14) now accepts a configured input whose scheme a loaded
 resolver handles, and skips one that nothing handles with a single WARN.
 
-**Depends on:** [play-station-by-uuid.md](play-station-by-uuid.md) (RADIO-001, the resolver), and
+**Depends on:** RADIO-001 (shipped: the resolver), and
 HUB-039 being deployed on `multiroom.lan` (its production check was still open on 2026-11-14).
 Overlaps [favourite-stations.md](favourite-stations.md): both keep stations across restarts; this
 one by editing configuration, that one at runtime.

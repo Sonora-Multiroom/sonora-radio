@@ -5,8 +5,7 @@
 **Origin:** The decision of 2026-11-12 to put radio-browser.info in a hub extension (see
 [AGENTS.md](../../AGENTS.md)): one search implementation for the CLI, MCP and the mobile app.
 
-**Depends on:** [play-station-by-uuid.md](play-station-by-uuid.md) (the extension and its
-radio-browser client).
+**Depends on:** RADIO-001 (shipped: the extension and its radio-browser client, `catalogue` package).
 
 **Effort:** Medium. A REST controller with its own OpenAPI, a response cache, filtering to codecs
 the hub can play, tests. Client work (CLI commands, `hub` package methods, MCP tool, mobile screen)

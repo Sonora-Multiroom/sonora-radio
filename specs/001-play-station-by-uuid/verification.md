@@ -94,4 +94,5 @@ play. Failure answers are 422 (see the finding in the local run).
   pinned hub commit; neither exists for this repository, so a copied workflow would fail on every
   pull request. Add it when the secret is set up.
 - **T059 (SpotBugs)**: optional, not run.
-- **T063**: after merge.
+- **T063**: done in the pull request (backlog item deleted, dependants updated). The `v0.1.0` tag is not
+  created: it waits for the merge and the owner's word.

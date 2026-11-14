@@ -6,7 +6,7 @@
 [AGENTS.md](../../AGENTS.md)). Favourites shared by every client of the house are one of the
 reasons for doing it in the hub.
 
-**Depends on:** [play-station-by-uuid.md](play-station-by-uuid.md). Best done on top of the hub's
+**Depends on:** RADIO-001 (shipped). Best done on top of the hub's
 `STORED` input origin, proposed in `sonora-multiroom/docs/backlog/persistent-input-store.md`.
 
 **Effort:** Medium. Small with the hub's store in place; larger if the extension must keep its own
