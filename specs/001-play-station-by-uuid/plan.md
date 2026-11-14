@@ -26,7 +26,8 @@ Design reasoning in [research.md](research.md).
 cache of station lookups
 
 **Testing**: JUnit 5, Mockito, AssertJ, Spring Boot `ApplicationContextRunner`, WireMock 3.9.2
-(fixtures in `src/test/resources/radiobrowser/`), JaCoCo 0.8.14 with an 80% line gate
+(fixtures in `src/test/resources/radiobrowser/`), JaCoCo 0.8.14 with an 80% line gate for the module and 90% for the `resolve`, `catalogue` and
+`catalogue.servers` packages
 
 **Target Platform**: the hub's JVM on Raspberry Pi OS (ARM64) in production; Windows for
 development
@@ -42,7 +43,7 @@ against the deadline (the JDK client's own timeouts do not cover a stalled body,
 across a network call; `supports` never throws or touches the network (the hub calls it at
 start-up since HUB-039); tests never contact radio-browser.info or real DNS
 
-**Scale/Scope**: one household; a handful of plays an hour; ~15 production classes
+**Scale/Scope**: one household; a handful of plays an hour; ~25 production classes
 
 ## Constitution Check
 

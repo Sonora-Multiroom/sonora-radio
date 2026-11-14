@@ -244,8 +244,8 @@ the hub starts and lists the extension as disabled.
 - **Resolved input**: what the extension hands the hub: an `http(s)` stream address, a display
   title (the station's bounded name), and the instruction to look the station up again when its
   address is refused.
-- **Catalogue server**: one radio-browser.info mirror, discovered or pinned; tried in shuffled
-  order with failover.
+- **Catalogue server**: one radio-browser.info mirror, discovered or pinned; tried with failover,
+  discovered servers in shuffled order and pinned servers in the order written.
 
 ## Success Criteria *(mandatory)*
 
@@ -259,8 +259,8 @@ the hub starts and lists the extension as disabled.
   (default settings), and other routes keep playing throughout.
 - **SC-004**: 100% of failed plays (malformed UUID, unknown station, refused codec, unreachable
   catalogue) leave no input behind and nothing playing.
-- **SC-005**: Hub start-up time is unchanged (within normal variance) with the extension installed,
-  including when radio-browser.info is unreachable.
+- **SC-005**: Hub start-up takes at most 2 seconds longer with the extension installed than
+  without it, including when radio-browser.info is unreachable.
 - **SC-006**: A play succeeds while at least one catalogue server answers, whichever position it has
   in the server order.
 - **SC-007**: Clients show the station's name for 100% of station inputs whose name the client did
@@ -277,11 +277,14 @@ Kraina FM, Radio NV).
 1. The deployed extension is listed in `/actuator/extensions` with its version and is not
    `REJECTED`; with `multiroom.radio.enabled=false` the hub starts and lists it as disabled.
 2. `POST /api/v2/play` with `radiobrowser://<uuid of a known-good station>` to `office` plays
-   audibly; the route's input shows the station's name, not the UUID.
+   audibly; the route's input shows the station's name, not the UUID. An input registered for a
+   station UUID without playing it causes no catalogue request until a route plays it.
 3. An unknown but well-formed UUID and a malformed one each fail with a clear error naming the
    station, and nothing plays; no input is left behind in `GET /api/v2/inputs`.
 4. The hub log shows which radio-browser server answered, and the request carried the
-   `sonora-radio/<version>` user agent (from the extension's own debug log).
+   `sonora-radio/<version>` user agent (from the extension's own debug log). For a station whose
+   catalogue entry has a playlist address and a different resolved address, the address the hub
+   played is the resolved one; if it is not, the design changes as research R3 describes.
 5. An HLS station plays on `office` for a few minutes, or, if it does not, the decision to refuse
    HLS is recorded with the evidence.
 6. A station whose codec is known and unsupported is refused with an error naming the codec, and

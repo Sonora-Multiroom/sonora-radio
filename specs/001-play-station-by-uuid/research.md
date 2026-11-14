@@ -68,6 +68,10 @@ radio-browser.info was **not** contacted (constitution XII); its facts come from
   `UPSTREAM_UNAVAILABLE` (which the hub retries on a re-lookup). Without this, a re-lookup after a
   refused address could hand the hub the same refused address from the cache, and a station
   deleted within the cache's lifetime would still play.
+- **The fresh lookup is checked like the first one**: the codec and HLS checks (step 2) are applied
+  again to the freshly looked-up station, since the cached details they were first applied to may
+  be out of date; a refusal fails the play as in R2, and no second play report is sent. A fresh
+  lookup answered with unreadable data fails `UPSTREAM_PROTOCOL_ERROR`.
 - **Rationale**: `/json/url` reports the play, as the service asks, but does not return the codec
   or HLS flag the policy needs, so a lookup is needed anyway. Doing the lookup first means a
   refused station (bad codec, HLS refused) costs no click (constitution IX, "clicks only for real
@@ -260,7 +264,9 @@ radio-browser.info was **not** contacted (constitution XII); its facts come from
   empty `<relativePath/>`; `extension.id` `radio`; `extension.name` `Radio Extension`;
   `multiroom.require_api_version` 0.1.33; version 0.1.0; `skip.wagon.upload` false; the `local`
   profile override pointing at `D:/projects-sonora/sonora-multiroom/extensions`; JaCoCo 0.8.14
-  with the 80% line gate. Dependencies `provided`: `spring-boot-starter` (no web needed),
+  with the 80% line gate for the module and 90% for the `resolve`, `catalogue` and
+  `catalogue.servers` packages (the constitution asks for more than the minimum for the resolver,
+  discovery and failover, timeouts and JSON mapping). Dependencies `provided`: `spring-boot-starter` (no web needed),
   `spring-boot-starter-validation`, `jackson-databind`, `micrometer-core`; optional
   `spring-boot-configuration-processor`. Test: `spring-boot-starter-test`, `wiremock-standalone`
   3.9.2.

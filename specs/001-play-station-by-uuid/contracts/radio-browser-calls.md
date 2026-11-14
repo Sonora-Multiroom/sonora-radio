@@ -67,7 +67,8 @@ and counted as `timeout`. A server that sends headers and then stalls is a timeo
 
 "Fallback for `play`" means the station lookup's address is played. When that lookup came from the
 station cache, the station is first looked up again (`byuuid`, same failover rules): not found
-fails the play as an unknown station, unreachable as `upstream_unavailable`.
+fails the play as an unknown station, unreachable as `upstream_unavailable`, unreadable as
+`upstream_protocol_error`. The codec and HLS checks are applied again to that fresh answer.
 
 ## Never called by this feature
 
