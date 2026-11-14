@@ -151,9 +151,11 @@ the hub starts and lists the extension as disabled.
 - **A stream host that vanishes while playing** (not a refused address): the hub does not yet look
   the station up again for this kind of failure (hub backlog `re-resolve-on-reconnect-failure.md`),
   so the route ends. Out of scope here.
-- **A station in `multiroom.yml`**: the hub's configuration validator refuses the scheme today;
-  covered by backlog `configured-station-inputs.md` and the hub's `resolver-schemes-in-config.md`.
-  Out of scope here.
+- **A station in `multiroom.yml`**: since HUB-039 (no API change) the hub accepts a configured
+  input whose scheme an installed resolver handles, so such an input is registered once the
+  extension is loaded and resolved when a route plays it. This feature neither tests nor promises
+  that (backlog `configured-station-inputs.md`); it only guarantees that the scheme check the hub
+  makes at start-up is cheap, never throws and contacts nothing.
 - **The extension not installed**: the hub refuses the scheme as unsupported, as it does today.
 
 ## Requirements *(mandatory)*
@@ -170,15 +172,19 @@ the hub starts and lists the extension as disabled.
 - **FR-003**: The extension MUST accept and ignore an optional label after the UUID, introduced by
   `#`.
 - **FR-004**: The extension MUST claim only the `radiobrowser` scheme and leave every other URI to
-  the hub's other resolvers.
+  the hub's other resolvers. Deciding whether a URI is claimed MUST be cheap, MUST NOT throw and
+  MUST NOT contact the network: the hub also asks at start-up, for every configured input.
 
 **Resolving a station**
 
 - **FR-005**: To resolve a station the extension MUST use the catalogue's play-counting station URL
   lookup, so that every play (re-lookups included) is reported to the catalogue; it MUST NOT report
   a play for anything other than resolving a station for playback.
-- **FR-006**: If the play report fails, the extension MUST play the stream address from the station
-  lookup it already made.
+- **FR-006**: If the play report fails (no server answers it, or it answers with an error, an
+  unreadable body, an explicit refusal or no address), the extension MUST play the stream address
+  from the station lookup. When that lookup was answered from the extension's own short-lived
+  cache, it MUST look the station up again first, so that an address the hub has just refused, or
+  a station that has since been removed, is never played from the cache.
 - **FR-007**: The extension MUST hand the hub only an `http` or `https` stream address and refuse
   any other scheme with an error naming the station UUID.
 - **FR-008**: The extension MUST offer the station's name to the hub as the resolved input's title,
@@ -296,15 +302,20 @@ Kraina FM, Radio NV).
 - **Codec support is the hub's own list** (today mp3, aac, opus, webm, ogg_vorbis, wav, flac); the
   extension asks the hub rather than keeping a copy.
 - **Default limits** (tunable): about 2 s to connect and 4 s to read per request, at most 3 servers
-  per play; together these keep a failing play under the 15 s in SC-003.
+  per request, and 10 s for one whole resolution. The last one is what keeps a failing play under
+  the 15 s in SC-003; it covers connecting, the response headers and the response body.
+- **Station lookups are cached briefly, play reports never**: a found station's details (name,
+  codec, HLS flag, address) are reused for a few minutes, with a size bound, because the catalogue
+  asks clients to cache. The play is still reported every time, and the address that plays comes
+  from that report.
 - **Name length is the hub's call**: the hub cuts a resolved title to its own display limit (64
   characters at API 0.1.33, which the owner may raise). The extension's safety limit (256
   characters) only bounds untrusted text and is well above any display limit.
 - **The label after `#`** is decided here (the backlog left it open): accepted and ignored. The
   resolved station name, not the label, names the input.
 - **Out of scope**: catalogue search and browse (`station-search-api.md`), favourites
-  (`favourite-stations.md`), stations in `multiroom.yml` (`configured-station-inputs.md`), voting,
-  caching of station lookups for play (every play must be reported), and re-lookup after
+  (`favourite-stations.md`), stations in `multiroom.yml` as a tested and supported use
+  (`configured-station-inputs.md`; the hub accepts them since HUB-039), voting, and re-lookup after
   non-refusal reconnect failures (a hub backlog item).
 - **Clients** (`sonora-cli`, `sonora-mcp`, `sonora-mobile`) need no change to use this feature; any
   convenience commands are their own backlog items.

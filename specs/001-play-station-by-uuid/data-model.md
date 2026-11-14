@@ -24,7 +24,7 @@ authority, a non-UUID authority, a path other than `/`, a query, user info or a 
 |---|---|---|---|
 | `uuid` | `stationuuid` | UUID | Must equal the requested UUID; an array with no matching entry is "unknown station" |
 | `name` | `name` | text | Becomes the title (see StationTitle); missing → no title |
-| `streamUrl` | `url_resolved` (else `url`) | text | Fallback address when the play report fails; validated as StreamAddress |
+| `streamUrl` | `url_resolved` (else `url`) | text | Fallback address when the play report fails, taken only from a lookup the catalogue has just answered, never from the cache; validated as StreamAddress |
 | `codecLabel` | `codec` | text | Trimmed, upper-cased for the codec policy; missing → empty |
 | `hls` | `hls` | boolean | `1`/`true` → HLS; anything else → not HLS |
 
@@ -35,8 +35,23 @@ array is an upstream protocol error.
 
 | Field | From | Type | Handling |
 |---|---|---|---|
-| `ok` | `ok` | boolean | `false` → treated as a failed report (fallback to `Station.streamUrl`) |
-| `url` | `url` | text | The address to play when present and valid |
+| `ok` | `ok` | boolean | `false` only for an explicit `false` (boolean, or the string `"false"`), which is a failed report (fallback to `Station.streamUrl`); missing or of another type → `true` |
+| `url` | `url` | text | The address to play. Missing or blank → failed report (fallback). Present but not `http(s)` → the play is refused (StreamAddress), not a fallback |
+
+A play report that cannot be obtained at all (no server answered, a 4xx, an unreadable body) is a
+failed report too.
+
+## CatalogueAnswer
+
+What `RadioBrowserClient` returns for each call: the value together with where it came from.
+
+| Field | Type | Rule |
+|---|---|---|
+| `value` | the Station (optional) or the PlayReport | As above |
+| `serverTag` | text, optional | The tag of the CatalogueServer that answered; empty when the value came from the station cache |
+
+A resolution is attributed (log line, `server` metric tag) to the last non-empty `serverTag` it
+saw, or `none`.
 
 ## StreamAddress
 
@@ -88,12 +103,15 @@ No codec registry in the host → allowed.
 |---|---|---|
 | `servers` | ordered list of CatalogueServer | Pinned order, or shuffled discovery |
 | `discoveredAt` | instant | `null` for a pinned list (never expires) |
-| `next` | index | Where the next request starts: the server that last answered |
+| `next` | index | Where the next request starts: the server that last answered. Discovered lists only; a pinned list always starts at its first entry |
 
 States: **empty** (nothing discovered yet; the first play discovers) → **fresh** (used as is) →
 **stale** (older than `server-list-ttl`, or every server failed on the last play: discovered again
 on the next play) → **fresh**. Held in an `AtomicReference`; replaced whole, never locked across a
 network call. A pinned list is always fresh.
+
+A DNS lookup that finishes after its wait timed out still stores its names as a fresh list, unless
+a list discovered later than that lookup started is already held.
 
 ## StationCache (cached state)
 
@@ -101,6 +119,10 @@ Held by `CachingRadioBrowserClient`: UUID → (`Station`, stored-at instant). An
 younger than `station-cache-ttl`; at `station-cache-size` entries the oldest is dropped. Only found
 stations are stored. Play reports are never stored or answered from it. Concurrent map, no lock held
 across a network call.
+
+`refreshStation(uuid)` always asks the catalogue, then replaces the entry (or removes it when the
+station is no longer found). The resolver uses it when a play report failed and the station it
+holds came from this cache, so a cached address is never the one that plays.
 
 ## RadioProperties (`multiroom.radio.*`)
 

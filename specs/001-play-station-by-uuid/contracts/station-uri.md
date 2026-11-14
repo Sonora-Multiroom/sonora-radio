@@ -20,7 +20,7 @@ compared and sent in lower case.
 |---|---|
 | `POST /api/v2/play` with `"uri": "radiobrowser://<uuid>"` | The hub registers an ephemeral input, starts the route, and this extension resolves the station while the route starts |
 | `POST /api/v2/inputs` with the URI | Registered without contacting the catalogue; resolved when a route first plays it |
-| `multiroom.yml` inputs | **Not accepted** (the hub's config validator refuses the scheme; backlog `configured-station-inputs.md`) |
+| `multiroom.yml` inputs | Accepted by a hub with HUB-039 once this extension is loaded (the hub asks the resolver at start-up whether it handles the scheme, which contacts nothing) and resolved when a route plays it. **Not tested or promised by this feature** (backlog `configured-station-inputs.md`) |
 
 With the extension absent or disabled, the hub's passthrough fails the play as an unsupported
 scheme, exactly as for any unknown scheme today.

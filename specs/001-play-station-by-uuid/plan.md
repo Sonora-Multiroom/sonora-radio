@@ -22,7 +22,8 @@ Design reasoning in [research.md](research.md).
 0.1.33); Spring Boot 3.x, Jackson, Micrometer, Bean Validation, all `provided`; JDK
 `java.net.http.HttpClient`
 
-**Storage**: none (an in-memory, TTL-bound server list only)
+**Storage**: none on disk; in memory, a TTL-bound server list and a small TTL- and size-bound
+cache of station lookups
 
 **Testing**: JUnit 5, Mockito, AssertJ, Spring Boot `ApplicationContextRunner`, WireMock 3.9.2
 (fixtures in `src/test/resources/radiobrowser/`), JaCoCo 0.8.14 with an 80% line gate
@@ -36,8 +37,10 @@ development
 requests to one mirror); hub start-up unchanged
 
 **Constraints**: no network during bean construction; one resolution bounded by `resolve-timeout`
-(10 s), failing within 15 s with every server down; no lock held across a network call; tests never
-contact radio-browser.info or real DNS
+(10 s), failing within 15 s with every server down, enforced by awaiting each `sendAsync` attempt
+against the deadline (the JDK client's own timeouts do not cover a stalled body, R8); no lock held
+across a network call; `supports` never throws or touches the network (the hub calls it at
+start-up since HUB-039); tests never contact radio-browser.info or real DNS
 
 **Scale/Scope**: one household; a handful of plays an hour; ~15 production classes
 
@@ -57,7 +60,7 @@ contact radio-browser.info or real DNS
 | VIII Extension boundary | `multiroom-api` only; entry point in `AutoConfiguration.imports`; no root config file (version file lives under `multiroom/radio/`); `radio` everywhere; lazy discovery; malformed config fails start-up; resolver returns only `http(s)`; `enabled=false` contributes nothing. No REST API, so no `@RestControllerAdvice` is needed yet |
 | IX Good citizen | `sonora-radio/<version>` UA with nothing about the home; discovery, shuffle, failover; no hard-coded mirror; play reported only on resolve and only after the station passed the checks; no polling or scheduled refresh; station lookups cached briefly with a size bound (`CachingRadioBrowserClient`, R13) while the play is still reported every time. No list or search requests, so no `limit` applies yet |
 | X Untrusted catalogue | UUID validated before any request; stream address must be `http(s)`; name stripped of control characters and bounded at 256 code points; names never in tags or logs; tolerant `JsonNode` mapping |
-| XI Hub keeps working | Per-request timeouts plus a per-resolve deadline; bounded server count; `UPSTREAM_UNAVAILABLE` on outage; no shared lock across I/O; discovery on a bounded, cached-pool executor (a stuck lookup never queues the next one) |
+| XI Hub keeps working | Per-request timeouts plus a per-resolve deadline that each attempt is awaited against (connect, headers and body); bounded server count; `UPSTREAM_UNAVAILABLE` on outage; no shared lock across I/O; discovery on a bounded, cached-pool executor (a stuck lookup never queues the next one) |
 | XII No live service in tests | WireMock and injected DNS only; live checks once, by hand, recorded in `verification.md` |
 
 No violations; Complexity Tracking is empty.
@@ -97,17 +100,19 @@ src/main/java/multiroom/radio/
 │   ├── StationTitle.java                 # strip, collapse, bound
 │   └── StreamAddress.java                # http(s) validation
 ├── catalogue/
-│   ├── RadioBrowserClient.java           # interface: station(uuid), reportPlay(uuid)
-│   ├── HttpRadioBrowserClient.java       # JDK HttpClient, failover, deadline
-│   ├── CachingRadioBrowserClient.java    # decorator: bounded TTL cache of station(); reportPlay never cached
+│   ├── RadioBrowserClient.java           # interface: station(uuid), refreshStation(uuid), reportPlay(uuid)
+│   ├── CatalogueHttp.java                # shared transport: lazy JDK HttpClient, headers, sendAsync awaited against the deadline, attempt classification
+│   ├── HttpRadioBrowserClient.java       # failover and JSON mapping on top of CatalogueHttp
+│   ├── CachingRadioBrowserClient.java    # decorator: bounded TTL cache of station(); refreshStation and reportPlay never cached
 │   ├── Station.java, PlayReport.java     # records mapped from JsonNode
+│   ├── CatalogueAnswer.java              # a value plus the tag of the server that answered (empty: from cache)
 │   ├── Deadline.java                     # remaining-time arithmetic
 │   ├── CatalogueUnavailableException.java
 │   ├── CatalogueProtocolException.java
 │   └── servers/
 │       ├── ServerSource.java             # interface
 │       ├── PinnedServerSource.java
-│       ├── DiscoveredServerSource.java   # DNS → /json/servers, TTL cache, AtomicReference
+│       ├── DiscoveredServerSource.java   # DNS → /json/servers (via CatalogueHttp), TTL cache, AtomicReference; at most half the resolve budget
 │       ├── DnsResolver.java              # interface over InetAddress
 │       ├── JdkDnsResolver.java
 │       └── CatalogueServer.java
@@ -120,7 +125,7 @@ src/main/resources/
 └── multiroom/radio/radio-version.properties   # filtered: version=${project.version}
 
 src/test/java/multiroom/radio/            # mirrors main; *Test per class
-├── RadioAutoConfigurationTest.java       # ApplicationContextRunner: enabled/disabled, no I/O at start, bad config
+├── RadioAutoConfigurationTest.java       # ApplicationContextRunner: enabled/disabled, no I/O at start, bad config; grows with each phase, ahead of the wiring it tests
 ├── resolve/…  catalogue/…  catalogue/servers/…  metrics/…
 src/test/resources/radiobrowser/          # hand-written fixtures (see contracts/radio-browser-calls.md)
 ```

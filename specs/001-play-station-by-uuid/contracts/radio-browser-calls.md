@@ -13,7 +13,9 @@ per-request timeouts and the per-resolution budget. WireMock fixtures under
 
 ## `GET /json/servers` (discovery fallback)
 
-Called on `https://<discovery-host>` only when DNS gave no usable names.
+Called on `https://<discovery-host>` only when DNS gave no usable names. DNS and this request
+together may use at most half of `resolve-timeout`. A DNS lookup that answers after its wait timed
+out is not thrown away: its names become the server list for the next play.
 
 ```json
 [ { "ip": "…", "name": "de1.api.radio-browser.info" }, … ]
@@ -43,13 +45,29 @@ Reports the play (one click per client address, station and day) and returns the
 
 Used: `ok`, `url`. Called only after the station passed the codec and HLS checks.
 
+- `ok` counts as failed only when it is an explicit `false` (boolean, or the string `"false"`);
+  missing or of another type, with a usable `url`, is a success.
+- A missing or blank `url` is a failed report (fallback).
+- A `url` that is present but not `http(s)` fails the play (`unsupported_address`); it is not a
+  fallback.
+
+## Time limits
+
+Each attempt (connecting, response headers and response body together) is awaited for at most the
+smaller of `connect-timeout + read-timeout` and what is left of `resolve-timeout`, then cancelled
+and counted as `timeout`. A server that sends headers and then stalls is a timeout like any other.
+
 ## Failover classification
 
 | Result | Next server? |
 |---|---|
 | Connect error, timeout, HTTP 5xx, HTTP 429 | yes, while servers and budget remain |
-| HTTP 4xx other than 429 | no (another mirror would answer the same) |
+| HTTP 4xx other than 429 | no (another mirror would answer the same); `upstream_protocol_error` for `station`, fallback for `play` |
 | 2xx with a body that is not the expected JSON shape | no; `upstream_protocol_error` for `station`, fallback for `play` |
+
+"Fallback for `play`" means the station lookup's address is played. When that lookup came from the
+station cache, the station is first looked up again (`byuuid`, same failover rules): not found
+fails the play as an unknown station, unreachable as `upstream_unavailable`.
 
 ## Never called by this feature
 

@@ -14,7 +14,7 @@ a rule fails hub start-up with a message naming `multiroom.radio` and the proper
 | `max-servers-per-request` | integer | `3` | 1–10 |
 | `servers` | list of URLs | empty | Empty: discover. Otherwise each an absolute `http`/`https` URL with a host, no path beyond `/`, no query or fragment; used in the order given |
 | `discovery-host` | host name | `all.api.radio-browser.info` | A plain host name (no scheme, port or path) |
-| `discovery-timeout` | duration | `3s` | Positive |
+| `discovery-timeout` | duration | `3s` | Positive. How long a play waits for the DNS lookup. Discovery as a whole (DNS plus the `/json/servers` fallback) is also cut off at half of `resolve-timeout` |
 | `server-list-ttl` | duration | `1h` | Positive |
 | `station-cache-ttl` | duration | `5m` | Positive. How long a found station's lookup is reused; play reports are never cached |
 | `station-cache-size` | integer | `100` | 1–10000. Oldest entry dropped first |
@@ -38,3 +38,6 @@ multiroom:
 - The `radio` in `multiroom.radio` is the extension id: the POM's `extension.id`, the
   auto-configuration's `@ConditionalOnProperty` and this prefix are the same string.
 - A pinned list never expires and is never discovered again; remove it to return to discovery.
+- A pinned list is always tried from its first entry, in the order written; it is never rotated
+  towards the server that last answered. An unreachable first entry therefore costs its timeout on
+  every play.

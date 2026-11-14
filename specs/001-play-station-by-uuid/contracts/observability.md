@@ -17,9 +17,9 @@ no registry, or no Micrometer on the classpath, nothing is recorded and nothing 
 | Tag | Values |
 |---|---|
 | `outcome` | `ok`, `fallback`, `invalid_uuid`, `unknown_station`, `unsupported_codec`, `hls_refused`, `unsupported_address`, `upstream_unavailable`, `upstream_protocol_error` |
-| `server` | the answering server's host name (with port if not default), or `none` when no server answered or none was asked |
+| `server` | for a request: the server it was sent to. For a resolution: the last server that answered during it (normally the one that took the play report), or `none` when no server answered or none was asked; an answer from the station cache is not a server's answer. Host name, with port if not default. Not a closed set: bounded by the mirror list |
 | `endpoint` | `station`, `play`, `servers` |
-| `result` (requests) | `ok`, `timeout`, `connect_error`, `http_4xx`, `http_5xx`, `bad_body` |
+| `result` (requests) | `ok`, `timeout`, `connect_error`, `http_429` (rate-limited by the service; kept apart so it is visible), `http_4xx` (any other 4xx), `http_5xx`, `bad_body` |
 | `source` | `dns`, `server_list`, `pinned` |
 | `result` (discoveries) | `ok`, `empty`, `timeout`, `error` |
 
