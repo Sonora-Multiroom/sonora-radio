@@ -1,0 +1,7 @@
+{
+  "ok": "true",
+  "message": "retrieved station url",
+  "stationuuid": "960e57c5-0601-11e8-ae97-52543be04c81",
+  "name": "Test FM",
+  "url": "https://stream.example.test/live-current.mp3"
+}

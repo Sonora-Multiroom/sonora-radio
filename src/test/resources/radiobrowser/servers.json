@@ -1,0 +1,5 @@
+[
+  {"ip": "192.0.2.1", "name": "de1.api.radio-browser.info"},
+  {"ip": "192.0.2.2", "name": "fi1.api.radio-browser.info"},
+  {"ip": "192.0.2.3", "name": "evil.example.test"}
+]

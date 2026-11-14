@@ -1,0 +1,22 @@
+[
+  {
+    "changeuuid": "11111111-1111-1111-1111-111111111111",
+    "stationuuid": "960e57c5-0601-11e8-ae97-52543be04c81",
+    "name": "Test FM",
+    "url": "https://stream.example.test/live.pls",
+    "url_resolved": "https://stream.example.test/live.mp3",
+    "homepage": "https://example.test/",
+    "favicon": "",
+    "tags": "pop,test",
+    "country": "Nowhere",
+    "countrycode": "XX",
+    "language": "english",
+    "votes": 12,
+    "codec": "AAC",
+    "bitrate": 128,
+    "hls": 1,
+    "lastcheckok": 1,
+    "clickcount": 3,
+    "some_future_field": {"nested": true}
+  }
+]
