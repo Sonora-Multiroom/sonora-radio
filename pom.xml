@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- The parent lives in the sonora-multiroom repository and is resolved from the local Maven
+         repository (~/.m2), never from a sibling directory. An empty <relativePath/> tells Maven
+         to skip the ../multiroom-extension-starter lookup; without it the build fails before it
+         starts. Install it with, in sonora-multiroom:
+             mvn -pl multiroom-api,multiroom-extension-starter -am install -->
+    <parent>
+        <groupId>ai.multiroom</groupId>
+        <artifactId>multiroom-extension-starter</artifactId>
+        <version>0.1.33</version>
+        <relativePath/>
+    </parent>
+
+    <artifactId>multiroom-radio</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+    <name>multiroom-radio</name>
+    <description>radio-browser.info stations for the multiroom audio hub</description>
+
+    <properties>
+        <extension.name>Radio Extension</extension.name>
+        <!-- NOT derived from the artifact id. `radio` is the single string three mechanisms share:
+             ExtensionScanner validates it against ^[a-z0-9-]+$, ExtensionStatusResolver reads
+             `multiroom.<id>.enabled` from it, and RadioAutoConfiguration's @ConditionalOnProperty
+             names that property literally. `multiroom-radio` here would split the on/off switch in
+             two, silently. -->
+        <extension.id>radio</extension.id>
+
+        <!-- The multiroom-api this extension compiles against and the lower bound of the
+             Require-API-Version range the starter writes into the manifest ([0.1.33,0.2.0)).
+             Raise it only when the extension starts using newer API. -->
+        <multiroom.require_api_version>0.1.33</multiroom.require_api_version>
+
+        <!-- The starter's `remote` profile (active by default) scp's the built JAR to
+             multiroom.lan. A bare `mvn deploy` therefore uploads to production: use -Plocal
+             while developing. -->
+        <skip.wagon.upload>false</skip.wagon.upload>
+
+        <!-- The starter's `local` profile copies to ${project.basedir}/../extensions, a sibling of
+             the module inside the monorepo. Outside it, point at the host checkout. -->
+        <multiroom.local-extensions-dir>D:/projects-sonora/sonora-multiroom/extensions</multiroom.local-extensions-dir>
+    </properties>
+
+    <dependencies>
+        <!-- Everything below is `provided`: the host supplies all of it at runtime under the
+             shared classloader, and bundling any of it risks colliding with another
+             independently built extension. multiroom-api itself comes from the parent POM. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Metrics go into the host's own MeterRegistry. Only
+             multiroom.radio.metrics.MicrometerRadioMetrics imports it, so the module still loads on
+             a host without it. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Only to check, in a test, the names Prometheus actually scrapes. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <!-- Filtering only for the version file: any other resource is copied untouched. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>true</filtering>
+                <includes>
+                    <include>multiroom/radio/radio-version.properties</include>
+                </includes>
+            </resource>
+            <resource>
+                <directory>src/main/resources</directory>
+                <filtering>false</filtering>
+                <excludes>
+                    <exclude>multiroom/radio/radio-version.properties</exclude>
+                </excludes>
+            </resource>
+        </resources>
+        <plugins>
+            <!-- The constitution's coverage floor (III) as a build gate: `mvn verify` fails below
+                 80% for the module, and below 90% for the packages that hold the resolver,
+                 discovery and failover, timeouts and JSON mapping. Pinned explicitly because the
+                 starter does not manage it. A build plugin, so nothing is shaded into the JAR. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.14</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.80</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                                <rule>
+                                    <element>PACKAGE</element>
+                                    <includes>
+                                        <include>multiroom.radio.resolve</include>
+                                        <include>multiroom.radio.catalogue</include>
+                                        <include>multiroom.radio.catalogue.servers</include>
+                                    </includes>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.90</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- Overrides the starter's copy target, which assumes a sibling extensions directory. -->
+        <profile>
+            <id>local</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-to-extensions</id>
+                                <phase>deploy</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <copy file="${project.build.directory}/${project.build.finalName}.jar"
+                                              tofile="${multiroom.local-extensions-dir}/${project.artifactId}.jar"
+                                              overwrite="true"/>
+                                        <echo message="Copied ${project.build.finalName}.jar to ${multiroom.local-extensions-dir}"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>
