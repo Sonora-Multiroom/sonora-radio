@@ -23,12 +23,14 @@ builds on RADIO-001 (play a station by its UUID).
   `limit` is the last page, as clients expect. Only records without a valid UUID are dropped, which
   is rare; a client that wants to be safe against it treats an empty page as the end too and
   otherwise adds `limit` to `offset`. (First answer, "only an empty page means the end", was
-  needed only by the whole-word tag filter and is withdrawn.)
+  needed only by the whole-word tag filter and is withdrawn. Replaced in the second review below:
+  a result now carries `nextOffset`, so the client does not infer the end from a page's length.)
 - Q: In what order do stations come back when a search has no `order`? → A: With no filter at all,
   most-clicked first (`clickCount`, highest first), the "trending" home list. With any filter
   (`name`, `tag`, `countryCode`, `language`, `codec`, `bitrateMin`), most-voted first (`votes`,
   highest first): all-time popularity, which ties less than the 24-hour click count. (Decided
-  2026-11-15 in the review; the first answer was `clickCount` always.)
+  2026-11-15 in the review; the first answer was `clickCount` always. Changed again in the second
+  review below: `votes` always, and a home screen asks for `order=clickCount` itself.)
 - Q: Should this feature teach the hub which catalogue codec labels it cannot play? → A: Not in
   code, and the station shape has no `playable` flag until the hub knows an unplayable label. The
   live acceptance gains one read-only step that records the catalogue's codec labels and their
@@ -54,6 +56,31 @@ A critical review of the draft changed these points, all approved by the owner:
 - The limit and offset caps and the list cache lifetime become fixed values, not settings; the
   request time budget stays a setting. A per-attempt time bound makes failover fit in the budget.
 - Live acceptance checks multi-language stations, tie order and list counts.
+
+### Session 2026-11-15 (second review)
+
+A second review checked the spec against the RADIO-001 code, the catalogue's documentation and the
+catalogue server's source (`segler-alex/radiobrowser-api-rust`, read 2026-11-15; no live request
+was made). Approved by the owner:
+
+- Whole-value matching needs the catalogue's `tagExact=true` and `languageExact=true`; without
+  them the catalogue matches any text that contains the value. The requirement now says so.
+- The remembered server list is used after it expires while a new one is looked up, and looking
+  servers up is bounded by the request's own budget. As RADIO-001 stands, an expired list is
+  looked up inside the request and may take the whole 5 seconds.
+- Search and tag results are an object with the list and `nextOffset`, not a bare list. The hub
+  knows whether the catalogue returned a full page; a client guessing from the page's length does
+  not.
+- The default order is `votes` whether or not a filter is given. A default that changes when a
+  filter is added is a surprise.
+- The catalogue sorts by the one chosen value with no second key, so equal values page unstably in
+  every order. Clients that page MUST drop stations they have already seen (by `uuid`).
+- Identical concurrent requests no longer share one catalogue call: the reason that removed the
+  search cache (one household) removes this too.
+- Smaller points: list counts are close to, not equal to, what search returns; every error from
+  these requests is a problem detail, including 500; `%` in a text filter is refused; countries
+  and languages are asked with an explicit limit; the per-attempt bound is half the request budget
+  instead of a second fixed value.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -87,10 +114,11 @@ without the client changing it.
    "jazz" are returned; a station whose only matching tag is "acid jazz" or "popular" is not. A
    client finds the exact tag name through the tag list (Story 2).
 4. **Given** no filters and no ordering, **When** a client asks for stations, **Then** it receives
-   20 stations, the most-clicked first.
-5. **Given** a search with more matches than one page, **When** the client asks for the next page
-   with `offset` raised by `limit`, **Then** it receives the following stations; a page shorter
-   than `limit` is the last page, and an empty page also means there are no more.
+   20 stations, the most-voted first; with `order=clickCount` it receives the most-clicked of the
+   last 24 hours first.
+5. **Given** a search with more matches than one page, **When** the client asks again with
+   `offset` set to the answer's `nextOffset`, **Then** it receives the following stations; an
+   answer whose `nextOffset` is empty is the last page.
 6. **Given** a station from a search result, **When** the client passes its `uri` to the hub's play
    request, **Then** the station plays as RADIO-001 describes; the search itself reported no play
    to the catalogue.
@@ -117,7 +145,8 @@ stations.
 1. **Given** the extension is enabled, **When** a client asks for countries, **Then** it receives
    each country's two-letter code, English name and station count, ordered by station count,
    highest first; the count includes only stations the catalogue does not mark as broken, so it
-   matches what a search for that country returns.
+   is close to what a search for that country returns (the catalogue keeps the count as a stored
+   number and the hub remembers the list for hours, so it is not exact).
 2. **Given** the extension is enabled, **When** a client asks for languages, **Then** it receives
    each language's name, its code where the catalogue has one, and its station count, ordered by
    station count.
@@ -186,6 +215,9 @@ search answers "unavailable" within the configured time while other hub requests
 6. **Given** a station record in the catalogue with missing, malformed or unexpected fields,
    **When** it appears in a result, **Then** the request still succeeds; the bad fields are left
    empty or the one record is dropped.
+7. **Given** the remembered list of catalogue servers has expired and looking servers up is slow,
+   **When** a search runs, **Then** it uses the expired list and succeeds within the time budget,
+   and a later request finds the new list.
 
 ---
 
@@ -210,9 +242,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
    names, search text or UUIDs in them.
 3. **Given** the extension is switched off or not installed, **When** a client calls a radio
    request, **Then** it answers "not found", which clients read as "radio is not available".
-4. **Given** a malformed setting (a time budget that is zero or negative or shorter than the
-   per-attempt bound), **When** the hub starts, **Then** start-up fails with a message naming the
-   extension and the setting.
+4. **Given** a malformed setting (a time budget that is zero or negative), **When** the hub
+   starts, **Then** start-up fails with a message naming the extension and the setting.
 
 ---
 
@@ -223,17 +254,26 @@ the extension off, restart, and see the requests answer "not found" while the hu
   naming the allowed range. A silently reduced `limit` would make a client that adds its own
   `limit` to `offset` skip stations.
 - **An `offset` past the end of the results**: an empty list.
-- **A page with fewer stations than `limit`**: the last page. The hub does not drop records from
-  the catalogue's page except those without a valid UUID; if that ever shortens a page that was
-  not the last, a client that stops at the first short page misses the rest. Accepted as rare.
-- **Equal values in the chosen order** (many stations share a click count or bitrate): the
-  catalogue decides their order and does not promise it is stable, so paging can repeat or skip
-  stations among ties even when nothing changed. Accepted; live acceptance measures how often.
+- **A page with fewer stations than `limit`**: not a signal. The hub drops records without a valid
+  UUID, so a page can be short without being the last; `nextOffset` says whether there is more,
+  and it is worked out from what the catalogue returned before anything was dropped.
+- **A next page that would start past the offset cap** (`offset` plus `limit` above 10000):
+  `nextOffset` is empty; the search ends there.
+- **Equal values in the chosen order** (many stations share a vote count, click count or bitrate):
+  the catalogue sorts by that one value with no second key, so paging can repeat or skip stations
+  among ties even when nothing changed. A client that pages drops stations whose `uuid` it has
+  already shown. Skipped stations are accepted; live acceptance measures how often.
+- **The remembered server list has expired**: it is still used for this request while a new one is
+  looked up without making the request wait. Only a hub that has never had a list (the first
+  request after a restart) waits for the look-up, inside the request's budget.
 - **A blank filter** (`name=` with nothing, or only spaces): treated as not given.
 - **A request parameter the extension does not know** (`countrycode`, `q`): refused as invalid,
   naming it, so a typo never returns an unfiltered list.
 - **A filter value that is very long or contains control characters**: refused as invalid; nothing
   that long is a station name, tag or language.
+- **A `%` in a text filter**: refused as invalid. The catalogue treats it as "any text", so
+  `tag=%` would match every station that has a tag. An `_` is passed on and may match any one
+  character; that only widens a match slightly and tags do contain it.
 - **A country code in lower case** (`ua`): accepted and treated as `UA`. Three letters, digits or
   anything else: refused.
 - **A station with no usable name, a very long name, HTML or control characters in its name or
@@ -249,7 +289,7 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **A country entry in the catalogue without a valid two-letter code**: dropped from the country
   list. A language without a code is kept, with an empty code.
 - **The same search repeated**: asks the catalogue again; only lists and single stations are
-  remembered. Identical requests running at the same moment share one catalogue call.
+  remembered.
 - **A failed catalogue request**: never remembered; the next request tries again.
 - **Paging while the catalogue changes**: pages are separate requests, so a station can appear on
   two pages or be skipped. Accepted.
@@ -285,28 +325,35 @@ the extension off, restart, and see the requests answer "not found" while the hu
   - `language`, `codec` and `tag` match the whole value only. `tag` is compared with each of a
     station's tags in turn: "jazz" does not match "acid jazz" or "popular" for "pop". `language`
     takes the catalogue's language name as the language list gives it. A station with several
-    languages must match a search for each of them (checked live, see Acceptance step 6).
+    languages must match a search for each of them (checked live, see Acceptance step 6);
+  - the extension MUST ask the catalogue for exact matching of `tag` and `language`
+    (`tagExact=true`, `languageExact=true`) on every search that carries them. Left out, the
+    catalogue matches any tag or language that contains the value. `codec` and `countryCode` are
+    always exact in the catalogue.
 - **FR-006**: Search MUST never return stations the catalogue marks as broken.
 - **FR-007**: Search MUST accept `limit` (default 20) and `offset` (default 0). `limit` MUST be
   between 1 and 100; `offset` MUST be between 0 and 10000. Both bounds are fixed, published in the
   API description, and not settings. A value outside its range MUST be refused as invalid, naming
   the range.
 - **FR-008**: Search MUST accept `order`, one of `name`, `votes`, `clickCount`, `bitrate`, and
-  `direction`, one of `asc`, `desc`. When `order` is not given, results are ordered by `clickCount`
-  if no filter is given and by `votes` if any filter is given. When `direction` is not given,
-  `votes` and `clickCount` are ordered highest first (`desc`) and `name` and `bitrate` lowest first
-  (`asc`). There is no `reverse` parameter.
-- **FR-009**: A search with no parameters MUST therefore return the 20 most-clicked stations; there
-  are no separate "top" requests. `limit`, `offset`, `order` and `direction` are not filters.
+  `direction`, one of `asc`, `desc`. When `order` is not given, results are ordered by `votes`,
+  with or without filters. When `direction` is not given, `votes` and `clickCount` are ordered
+  highest first (`desc`) and `name` and `bitrate` lowest first (`asc`). There is no `reverse`
+  parameter.
+- **FR-009**: A search with no parameters MUST therefore return the 20 most-voted stations, and
+  `order=clickCount` alone the 20 most-clicked of the last 24 hours (a "trending" list); there are
+  no separate "top" requests.
 - **FR-010**: `countryCode` MUST be two letters (ISO 3166-1 alpha-2), accepted in either case.
   `bitrateMin` MUST be a non-negative whole number. Text filters MUST be trimmed, ignored when
-  blank, and refused when longer than a fixed bound or containing control characters.
-- **FR-011**: A search result MUST be a plain list of stations. The extension MUST NOT filter or
-  reorder the catalogue's page, except to drop records without a valid UUID, and MUST NOT ask the
-  catalogue again to fill a page. A page shorter than `limit` is therefore the last page, and an
-  empty page also means the end; a client pages by adding `limit` to `offset`. The tag list
-  follows the same rule. The order among stations with equal values is the catalogue's and is not
-  promised to be stable.
+  blank, and refused when longer than a fixed bound or containing control characters or `%`.
+- **FR-011**: A search result MUST be an object (`RadioStationPage`) with `stations`, the list,
+  and `nextOffset`. The extension MUST NOT filter or reorder the catalogue's page, except to drop
+  records without a valid UUID, and MUST NOT ask the catalogue again to fill a page. `nextOffset`
+  is `offset` plus `limit` when the catalogue returned `limit` records (counted before any are
+  dropped) and that value is within the offset cap; otherwise it is empty, which means the last
+  page. A client pages by sending `nextOffset` as the next `offset` and never infers the end from
+  a page's length. The order among stations with equal values is the catalogue's and is not
+  stable, so a client that pages MUST drop stations whose `uuid` it has already received.
 
 **One station**
 
@@ -320,9 +367,14 @@ the extension off, restart, and see the requests answer "not found" while the hu
   count; the language list each language's name, code (empty when the catalogue has none) and
   station count; the tag list each tag's name and station count. All three are ordered by station
   count, highest first, and count only stations the catalogue does not mark as broken (the
-  extension asks the catalogue to hide broken stations in the lists, as in search).
+  extension asks the catalogue to hide broken stations in the lists, as in search). The counts
+  are the catalogue's stored numbers and are remembered here for hours, so they are close to, not
+  equal to, what a search returns. The country and language lists are returned whole, as plain
+  lists; the extension asks the catalogue for them with a fixed limit of 2000, larger than either
+  list (225 countries and 585 languages on 2026-11-15).
 - **FR-015**: The tag list MUST accept an optional `name` filter and `limit` and `offset` with the
-  same defaults, caps and validation as search.
+  same defaults, caps and validation as search, and MUST answer in the same form
+  (`RadioTagPage`: `tags` and `nextOffset`, worked out as in search).
 - **FR-016**: Entries without a usable identity (a country without a valid two-letter code, a tag
   or language without a name) MUST be dropped.
 
@@ -356,7 +408,10 @@ the extension off, restart, and see the requests answer "not found" while the hu
   - 404: a well-formed UUID the catalogue does not know;
   - 502: the catalogue answered with something unreadable, or refused the request;
   - 503: no catalogue server answered within the time budget, with a `Retry-After` header.
-  The content type is `application/problem+json`.
+  The content type is `application/problem+json`. Every other error these requests can answer
+  (a value of the wrong type such as `limit=abc`, a method that is not allowed, an unexpected
+  failure as 500) MUST have the same form: the hub's own error handling covers only REST v2, so
+  the extension handles them itself.
 - **FR-024**: An invalid `order` or any other invalid parameter MUST be caught by the extension and
   never forwarded to become a catalogue error. Unknown parameters are refused (400) on these
   requests, so a misspelt filter cannot be mistaken for "no filter".
@@ -365,16 +420,22 @@ the extension off, restart, and see the requests answer "not found" while the hu
 
 - **FR-025**: One request, server discovery and failover included, MUST be bounded by a time budget
   of its own (default 5 seconds, a setting), separate from and shorter than the budget for playing
-  a station. Each attempt on one server MUST also have a fixed shorter bound (about 2 seconds), so
-  that a slow first server leaves time for the next.
+  a station. Each attempt on one server MUST also have a shorter bound, half the request's budget
+  (2.5 seconds by default), so that a slow first server leaves time for the next.
 - **FR-026**: Catalogue requests MUST reuse RADIO-001's server discovery, failover, pinned server
-  list and user agent, and MUST always state an explicit result limit to the catalogue. The
-  discovered server list and the last server that answered MUST be remembered for a bounded time
-  (if RADIO-001 does not already), so a slow lookup does not eat the budget of every request.
+  list and user agent, and MUST always state an explicit result limit to the catalogue. RADIO-001
+  already remembers the discovered server list and the last server that answered. Two things
+  change, for plays as well as for these requests:
+  - when the remembered list has expired, the request MUST use it as it is and the new look-up
+    MUST NOT make that request wait (the look-up is still started only because a request came, so
+    it is not a scheduled refresh); the new list replaces the old one when it arrives. A list
+    whose servers all failed is not reused this way;
+  - when there is no list at all, looking servers up MUST be bounded by what is left of the
+    calling request's budget, not by a share of the play budget.
 - **FR-027**: Country, language and tag lists MUST be remembered for 6 hours, keyed by the
   normalised parameters, with a bound on how many are kept, oldest dropped first. Station lookups
   reuse RADIO-001's short station memory. Search results are NOT remembered. Failures MUST NOT be
-  remembered. Identical catalogue requests in flight at the same moment MUST share one call.
+  remembered.
 - **FR-028**: The catalogue MUST be contacted only because a client asked: no polling, crawling,
   prefetching or scheduled refresh.
 - **FR-029**: A slow or unreachable catalogue MUST NOT delay hub start-up, playback or any request
@@ -383,17 +444,18 @@ the extension off, restart, and see the requests answer "not found" while the hu
 **Operation**
 
 - **FR-030**: The request time budget MUST be a setting under `multiroom.radio.*` with a working
-  default; a value that is zero, negative or shorter than the per-attempt bound MUST fail hub
-  start-up with a message naming the extension and the setting. The limit and offset bounds and
-  the list lifetime are fixed values.
+  default; a value that is zero or negative MUST fail hub start-up with a message naming the
+  extension and the setting. The limit and offset bounds and the list lifetime are fixed values;
+  the per-attempt bound follows from the budget.
 - **FR-031**: The extension MUST count catalogue requests by kind (`search`, `countries`,
   `languages`, `tags`, alongside RADIO-001's) and outcome, with no search text, station names or
   UUIDs in metric tags, and work unchanged when the hub has no metrics registry.
 - **FR-032**: Logs MUST identify stations by UUID and MUST NOT contain unbounded text from the
   catalogue or from a client's filters.
 - **FR-033**: The requests, their parameters, errors and data shapes MUST appear in the hub's
-  published API description, with shape names prefixed `Radio` (`RadioStation`, `RadioCountry`,
-  `RadioLanguage`, `RadioTag`, `RadioProblem`) so they cannot collide with another extension's.
+  published API description, with shape names prefixed `Radio` (`RadioStation`,
+  `RadioStationPage`, `RadioCountry`, `RadioLanguage`, `RadioTag`, `RadioTagPage`,
+  `RadioProblem`) so they cannot collide with another extension's.
 
 ### Key Entities
 
@@ -405,6 +467,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
   name from the code.
 - **Language** (`RadioLanguage`): name, ISO 639 code where known, station count.
 - **Tag** (`RadioTag`): a free-text genre or label, with its station count.
+- **Page** (`RadioStationPage`, `RadioTagPage`): one answer to a search or a tag listing: the
+  list, and `nextOffset`, the `offset` of the next page or empty on the last one.
 - **Search query**: the filters, ordering and paging of one search.
 - **Problem** (`RadioProblem`): the error answer, in the same RFC 7807 form as REST v2.
 
@@ -419,6 +483,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
   request accepts unchanged.
 - **SC-003**: When the first catalogue server answers, a search or list is answered within 2
   seconds; a list asked for moments before is answered at once without contacting the catalogue.
+  The first request after a hub restart may take longer, because it also looks the servers up,
+  but stays within the time budget; an expired server list costs a request nothing.
 - **SC-004**: With every catalogue server unreachable, every radio request answers "unavailable"
   within 5 seconds (default settings), and playback and the rest of the hub keep answering
   throughout.
@@ -426,10 +492,10 @@ the extension off, restart, and see the requests answer "not found" while the hu
   refused without the catalogue being contacted.
 - **SC-006**: No single request can ask the catalogue for more than 100 results, and repeating a
   browse list within its lifetime costs the catalogue nothing.
-- **SC-007**: A client that pages by adding `limit` to `offset` until it receives a page shorter
-  than `limit` sees every station the search matches, with one rule for every search and tag
-  listing, except that stations with equal values in the chosen order may repeat or be skipped
-  between pages (the catalogue's tie order is not stable).
+- **SC-007**: A client that pages by following `nextOffset` until it is empty, dropping stations
+  whose `uuid` it has already received, shows no station twice and reaches the end of every search
+  and tag listing with one rule. Stations with equal values in the chosen order may still be
+  skipped between pages (the catalogue's tie order is not stable).
 - **SC-008**: Hub start-up is no slower with this feature than with RADIO-001 alone, including when
   radio-browser.info is unreachable.
 
@@ -440,13 +506,15 @@ hub (`multiroom.lan`), never in the automated build; record commands, date and r
 `verification.md`. Every step is a read-only request and makes no sound. Deploying the JAR and
 restarting the hub need the owner's permission as always.
 
-1. `GET /api/radio/stations?name=kiss&countryCode=UA&limit=10` returns at most 10 stations, each
-   with a UUID, `uri`, name, codec and bitrate, ordered by votes, highest first.
-2. `GET /api/radio/stations` with no parameters returns 20 stations ordered by click count, highest
-   first.
+1. `GET /api/radio/stations?name=kiss&countryCode=UA&limit=10` returns at most 10 stations in
+   `stations`, each with a UUID, `uri`, name, codec and bitrate, ordered by votes, highest first,
+   and a `nextOffset` that is 10 or empty; following `nextOffset` reaches an answer where it is
+   empty.
+2. `GET /api/radio/stations` with no parameters returns 20 stations ordered by votes, highest
+   first; with `order=clickCount` it returns 20 ordered by click count, highest first.
 3. `GET /api/radio/countries`, `/languages` and `/tags?name=jazz` return lists ordered by station
-   count, and the count for one country equals what a search for it can reach (broken stations
-   hidden in both); a second call within the lifetime does not reach radio-browser: the extension's catalogue
+   count, and the count for one small country is close to the number of stations a search for it
+   returns (broken stations hidden in both; record both numbers); a second call within the lifetime does not reach radio-browser: the extension's catalogue
    request counter for that kind of request, read from `/actuator/metrics`, does not grow.
 4. `GET /api/radio/stations/{uuid}` for a station from step 1 returns the same station; an unknown
    UUID answers 404 and a malformed one 400, both as problem details.
@@ -454,15 +522,18 @@ restarting the hub need the owner's permission as always.
    `multiroom` package, so no hub change is expected).
 6. Check the upstream facts this feature assumes and correct the spec if they differ: `tags` and
    `language` arrive as comma-separated text, a `bitrate` of 0 means unknown, the size of the full
-   tag list, and the fields of the catalogue's country and language lists. Also check, and correct
-   the spec if they differ:
+   tag list and the sizes of the country and language lists, and the fields of the catalogue's
+   country and language lists (`iso_3166_1` and `iso_639` according to its documentation). Also
+   check, and correct the spec if they differ (the first two and the last were read in the
+   catalogue server's source on 2026-11-15 and are expected to hold; the live check confirms the
+   running servers behave the same):
    - `language=ukrainian` returns stations that list several languages (for example
      "ukrainian,russian"), not only single-language ones; if it does not, `language` needs another
      rule;
    - `tag=jazz` does not return a station whose only tag is "acid jazz";
-   - the same search with `order=clickCount` and with `order=votes` (the default for a filtered
-     search), asked twice and as two adjacent pages, shows how stable the order among equal
-     values is (record the number of repeated or missing stations for each order);
+   - the same search with `order=clickCount` and with `order=votes` (the default), asked twice
+     and as two adjacent pages, shows how stable the order among equal values is (record the
+     number of repeated or missing stations for each order);
    - the country, language and tag lists accept hiding broken stations, and their counts drop
      accordingly.
 7. Record which codec labels the catalogue uses: one read-only request for the catalogue's codec
@@ -470,6 +541,13 @@ restarting the hub need the owner's permission as always.
    in `verification.md`. The labels the hub cannot play (WMA, labels that include a video codec)
    are named there, and the backlog question "labels the hub cannot play" is updated from that
    evidence. Nothing in this feature's code depends on the result.
+
+Steps 6 and 7 were run on 2026-11-15, before planning, straight against one catalogue server
+(`verification.md`). Every assumption held: exact matching needs the two flags and keeps
+multi-language stations; `tags` and `language` are comma-separated text; `bitrate` 0 occurs;
+`hls` and `lastcheckok` arrive as 0 or 1; there are 225 countries, 585 languages (447 without a
+code) and 11145 tags; the order among equal values did not change between requests or page sizes.
+They are repeated only if planning changes what is asked of the catalogue.
 
 Not live: "every configured server unreachable answers 503 within the time budget, and the rest of
 the hub keeps answering" is proved by an automated test against a stand-in catalogue. On production
@@ -488,15 +566,21 @@ has the form RADIO-001 accepts.
 - **Decided here, where the backlog item was silent or open**:
   - *Out-of-range `limit` and `offset` are refused (400), not silently reduced*, so that a
     client that does not know the cap never advances `offset` by more than the hub served.
-  - *The default ordering is `clickCount` with no filter and `votes` with any filter*, highest
-    first (decided by the owner, see Clarifications). The 24-hour click count suits a "trending"
-    home list but ties heavily and makes paging unstable in a filtered search; all-time votes
-    ties less.
+  - *The default ordering is `votes`, highest first, with or without filters* (decided by the
+    owner, see Clarifications). One default is easier to predict than one that changes when a
+    filter is added; a home screen that wants a "trending" list asks for `order=clickCount`. No
+    order is stable among equal values, because the catalogue sorts by one value only, so clients
+    drop repeats by `uuid`.
+  - *Search and tag results are an object with `nextOffset`*, unlike REST v2's plain lists, which
+    are not paged. A bare list could never gain a "more" marker without a new path, and the hub,
+    not the client, knows whether the catalogue's page was full.
   - *Cache*: lists for 6 hours, fixed; searches are not cached (on one household hub a
     one-minute search cache would rarely hit and would add bounded-map code and tests; it can come
     back if a client is seen repeating searches).
   - *Fixed bounds*: `limit` at most 100 and `offset` at most 10000 are contract values, not
-    settings, so the API description can state them; a configurable cap could not.
+    settings, so the API description can state them; a configurable cap could not. Constitution
+    VIII still lists "a result-limit cap outside its allowed range" as a configuration fault; the
+    plan's Constitution Check records that there is no such setting.
   - *Strict parameters*: unknown parameters answer 400 here, unlike elsewhere in the hub, because
     this API is called by tools that guess parameter names and a silent unfiltered 200 hides the
     mistake.
@@ -504,14 +588,16 @@ has the form RADIO-001 accepts.
     fixed values chosen during planning, not settings.
 - **No `playable` flag**: the hub decodes every codec label the extension maps, and unmapped labels
   are let through, so nearly every station would be playable. Teaching the codec decision about
-  labels that are known not to work (WMA, video mixes) stays an open backlog question and is not
-  part of this feature's code; live acceptance step 7 collects the labels the catalogue really
-  uses, so the follow-up starts from evidence. When it is answered, a `playable` field is added
+  labels that are known not to work stays an open backlog question and is not part of this
+  feature's code. Live acceptance step 7 collected the labels the catalogue really uses
+  (`verification.md`): there is no WMA label; the candidates are the three labels that include
+  `H.264` (59 stations), `MP4` and `FLV` (30), and `OGG` and `UNKNOWN` are untested. When it is answered, a `playable` field is added
   (non-breaking) and RADIO-001's refusal changes together with it.
 - **Out of scope**: a play request; voting; a `playable` field and a `playableOnly` filter (only
   once a client needs them and the hub knows an unplayable label); favourites
   (`favourite-stations.md`); other filters the catalogue has (`bitrateMax`, `is_https`, several tags at once, word matching for `name` or `language`);
-  totals or "has more" markers in results.
+  totals in results (the catalogue does not report them); sharing one catalogue call between
+  identical requests in flight.
 - **Client work is separate**: `sonora radio …` commands and `hub` package methods in `sonora-cli`,
   the MCP tool in `sonora-mcp` and the browse and search screen in `sonora-mobile` go into those
   repositories' backlogs once this API is fixed, as does the question of whether their copies of

@@ -1,8 +1,8 @@
 # Search the catalogue through the hub
 
-**Status:** Specified in `specs/002-station-search-api/` (2026-11-15), where it was revised after a
-critical review; the spec wins where the two differ. Written 2026-11-12, reviewed against the code
-2026-11-14.
+**Status:** Specified in `specs/002-station-search-api/` (2026-11-15), where it was revised after
+two critical reviews; the spec wins where the two differ. Written 2026-11-12, reviewed against the
+code 2026-11-14 and against the catalogue server's source 2026-11-15.
 
 **Origin:** The decision of 2026-11-12 to put radio-browser.info in a hub extension (see
 [AGENTS.md](../../AGENTS.md)): one search implementation for the CLI, MCP and the mobile app.
@@ -54,15 +54,17 @@ in a third response shape, because the hub's `PlaybackResponse` lives in `multir
   **`direction`**: `asc` or `desc`; defaults to `desc` for `votes` and `clickCount`, `asc` for
   `name` and `bitrate`. (No `reverse`: upstream's flag means the opposite of these defaults.)
 - **`tag`, `language`, `codec`** match the whole value only; there is no substring or whole-word
-  mode, so the extension never filters the catalogue's page and a page shorter than `limit` is the
-  last one. Find the exact tag through `/tags?name=`.
-- **Ties**: stations with equal values in the chosen order may repeat or be skipped between pages;
-  upstream does not promise a stable order among ties.
-- **No filters at all** returns the most-clicked stations (`clickCount`, descending). That is the
-  home screen's "popular" list; no separate `topclick` / `topvote` endpoints. With any filter and
-  no `order`, results are ordered by `votes`, descending: all-time popularity ties less than the
-  24-hour click count, so paging is steadier.
-- `countryCode` is ISO 3166-1 alpha-2, validated before any network call.
+  mode, so the extension never filters the catalogue's page. Upstream matches substrings unless
+  told otherwise, so the extension always sends `tagExact=true` and `languageExact=true`. Find the
+  exact tag through `/tags?name=`.
+- **Ties**: upstream sorts by the one chosen column with no second key, so stations with equal
+  values may repeat or be skipped between pages in every order. A client that pages drops stations
+  whose `uuid` it has already received.
+- **No `order`** means `votes`, descending, with or without filters. No filters at all is the
+  "popular" list; a home screen that wants "trending" sends `order=clickCount`. No separate
+  `topclick` / `topvote` endpoints.
+- `countryCode` is ISO 3166-1 alpha-2, validated before any network call. A `%` in a text filter
+  is 400 (upstream treats it as a wildcard).
 
 ### Response shapes
 
@@ -80,12 +82,15 @@ simple class name across the hub's shared classpath (the reason `sonora-tts` has
   Add `playable` (a non-breaking change) once the policy knows labels the hub cannot play.
 - **Stations the hub would refuse are returned, not hidden.** Hiding them after the upstream query
   would return short pages, and a short page means the last one.
-- **Search result**: a JSON array of `RadioStation`, like REST v2's lists (so `total` or `next`
-  cannot be added later without a breaking change; accepted). A page shorter than `limit` is the
-  last page.
+- **Search result**: an object, `RadioStationPage`: `stations` (array of `RadioStation`) and
+  `nextOffset` (the next page's `offset`, null on the last page). The hub sets `nextOffset` when
+  upstream returned a full page, counted before invalid records are dropped, so a client never
+  infers the end from a page's length. REST v2's lists are bare arrays, but they are not paged.
+  The tag list answers the same way (`RadioTagPage`: `tags`, `nextOffset`).
 - **`RadioCountry`**: `code` (ISO 3166-1 alpha-2), `name` (English), `stationCount`.
   **`RadioLanguage`**: `code` (ISO 639, may be null), `name`, `stationCount`. **`RadioTag`**:
-  `name`, `stationCount`. Clients localise country and language names from the codes.
+  `name`, `stationCount`. Clients localise country and language names from the codes. Countries
+  and languages are returned whole, as bare arrays.
 
 ### Errors
 
@@ -100,20 +105,26 @@ to this module's API interfaces.
 | 502 | The catalogue answered with something unreadable, or refused the request |
 | 503 | No catalogue server answered within the budget (with `Retry-After`) |
 
-Content type `application/problem+json`.
+Content type `application/problem+json`, also for a wrongly typed value (`limit=abc`), a method
+that is not allowed and an unexpected 500: the hub's `V2ExceptionHandler` covers only its own
+package, so the extension's advice must handle them.
 
 ### Time budget and cache
 
 - **Budget:** a new `multiroom.radio.request-timeout` (default 5 s) bounds one REST request,
   discovery and failover included. `resolve-timeout` (10 s) stays for plays; it is too long for a
-  search screen. Each attempt on one server has its own shorter bound (about 2 s) so failover
-  fits, and the discovered server list and last good server are remembered, because DNS on the
-  home network is slow.
+  search screen. Each attempt on one server is bounded by half the budget so failover fits.
+- **Server list:** RADIO-001 remembers the discovered list (1 hour) and the last good server, but
+  looks an expired list up inside the request, for up to half of `resolve-timeout` (5 s, the whole
+  search budget), and DNS on the home network is slow. Change `DiscoveredServerSource`: an expired
+  list is still used while the new look-up runs off the request, and a look-up with no list at all
+  is bounded by the caller's remaining budget.
 - **Lists** (countries, languages, tags per filter): cached for 6 hours (fixed), asked upstream
-  with `hidebroken=true` so counts match search.
+  with `hidebroken=true` (upstream then reports its stored working-station count) so counts are
+  close to what search returns. Countries and languages are asked with an explicit fixed limit.
 - **Search results:** not cached. On one household hub a one-minute cache would rarely hit; it can
-  return if a client is seen repeating searches. Identical requests in flight at the same moment
-  share one upstream call.
+  return if a client is seen repeating searches. For the same reason, identical requests in flight
+  do not share an upstream call.
 - **Station lookups** reuse `CachingRadioBrowserClient`; the `Station` record grows to carry the
   fields above. A search result never supplies the address that plays: that still comes from the
   play report (RADIO-001, research R3).
@@ -137,12 +148,14 @@ Run once by hand while the feature is verified against the real hub (`multiroom.
 a read-only request and makes no sound. Deploying the JAR and restarting the hub need permission
 as always.
 
-1. `GET /api/radio/stations?name=kiss&countryCode=UA&limit=10` returns at most 10 stations, each
-   with a UUID, `uri`, name, codec and bitrate, ordered by votes, highest first.
-2. `GET /api/radio/stations` with no parameters returns 20 stations ordered by click count,
-   highest first.
+1. `GET /api/radio/stations?name=kiss&countryCode=UA&limit=10` returns at most 10 stations in
+   `stations`, each with a UUID, `uri`, name, codec and bitrate, ordered by votes, highest first,
+   and a `nextOffset` that is 10 or null; following it reaches a page where it is null.
+2. `GET /api/radio/stations` with no parameters returns 20 stations ordered by votes, highest
+   first; with `order=clickCount`, 20 ordered by click count.
 3. `GET /api/radio/countries`, `/languages` and `/tags?name=jazz` return lists ordered by station
-   count; a second call within the cache lifetime does not reach radio-browser: the extension's
+   count, and one small country's count is close to what a search for it returns; a second call
+   within the cache lifetime does not reach radio-browser: the extension's
    catalogue request counter for that endpoint, read from `/actuator/metrics`, does not grow.
 4. `GET /api/radio/stations/{uuid}` for a station from step 1 returns the same station; an unknown
    UUID answers 404 and a malformed one 400, both as problem details.
@@ -150,11 +163,17 @@ as always.
    `multiroom` package, so no hub change is expected).
 6. Check the upstream facts this item assumes and correct it if they differ: `tags` and `language`
    arrive as comma-separated strings, `bitrate` 0 means unknown, the size of the full tag list,
-   and the fields of `/json/countries` and `/json/languages`. Also: `language=ukrainian` returns
+   the sizes of the country and language lists, and the fields of `/json/countries` and
+   `/json/languages` (`iso_3166_1`, `iso_639` per the documentation). Also (the exact-match and
+   `hidebroken` points were read in the server's source on 2026-11-15; confirm the running servers
+   agree): `language=ukrainian` returns
    multi-language stations; `tag=jazz` does not return a station tagged only "acid jazz"; how
    stable the order among equal click counts and equal votes is across repeated calls and adjacent
    pages (record repeats and gaps for each); the
    lists accept `hidebroken` and their counts match search.
+
+Step 6 and the codec labels were checked on 2026-11-15, before planning; every assumption held
+(results in `specs/002-station-search-api/verification.md`).
 
 Not live: "every configured server unreachable answers 503 within `request-timeout`, and the rest
 of the hub keeps answering" is a WireMock test in `mvn verify`. On production it would need pinned
@@ -166,9 +185,11 @@ form RADIO-001 accepts.
 ## Open questions
 
 - **Labels the hub cannot play:** should `CodecPolicy` learn radio-browser labels that are known
-  not to work (for example WMA, or video mixes such as `AAC,H.264`), so that a `playable` field
-  and the resolver's refusal can mean something? Needs a look at which labels the catalogue really
-  uses.
+  not to work, so that a `playable` field and the resolver's refusal can mean something? The
+  labels were recorded on 2026-11-15 (`specs/002-station-search-api/verification.md`): no `WMA`
+  and no `OPUS` label exists (so the `OPUS` mapping never matches); candidates to refuse are
+  `AAC,H.264`, `AAC+,H.264`, `UNKNOWN,H.264` (59 stations), `MP4` (17) and `FLV` (13). Whether
+  `OGG` (486) and `UNKNOWN` (1669) stations play needs audible tests.
 - **A `playable` field and a parameter to hide unplayable stations** (`playableOnly=true`,
   accepting short pages): only once the hub knows an unplayable label and a client asks.
 - **Compatibility promise (decided):** `/api/radio/**` stays unversioned, like `/api/tts/**`.
