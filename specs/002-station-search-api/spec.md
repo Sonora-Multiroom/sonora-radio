@@ -280,7 +280,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **A country code in lower case** (`ua`): accepted and treated as `UA`. Three letters, digits or
   anything else: refused.
 - **A station with no usable name, a very long name, HTML or control characters in its name or
-  tags**: control characters are stripped and lengths bounded before it is returned; a station
+  tags**: control characters are stripped and lengths bounded before it is returned; a name with
+  nothing left is returned as null, and the station is still listed; a station
   whose UUID is missing or malformed is dropped from the result.
 - **A station with dozens of tags, or one enormous tag**: the number of tags and each tag's length
   are bounded.
