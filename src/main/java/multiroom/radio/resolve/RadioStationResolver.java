@@ -1,5 +1,7 @@
 package multiroom.radio.resolve;
 
+import multiroom.radio.text.StationTitle;
+import multiroom.radio.text.Text;
 import multiroom.api.io.resolve.EndpointRefreshMode;
 import multiroom.api.io.resolve.InputEndpointResolver;
 import multiroom.api.io.resolve.InputResolutionException;

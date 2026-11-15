@@ -46,8 +46,8 @@ class HttpRadioBrowserClientTest {
         second = new WireMockServer(options().dynamicPort());
         second.start();
         properties = new RadioProperties();
-        properties.setConnectTimeout(Duration.ofMillis(300));
-        properties.setReadTimeout(Duration.ofMillis(300));
+        properties.setConnectTimeout(Duration.ofMillis(800));
+        properties.setReadTimeout(Duration.ofMillis(800));
         metrics = new RecordingMetrics();
     }
 
@@ -200,7 +200,7 @@ class HttpRadioBrowserClientTest {
 
     @Test
     void movesOnAfterATimeout() {
-        wire.stubFor(get(urlPathEqualTo(BYUUID)).willReturn(aResponse().withFixedDelay(1000).withBody("[]")));
+        wire.stubFor(get(urlPathEqualTo(BYUUID)).willReturn(aResponse().withFixedDelay(1500).withBody("[]")));
         stationOk(second);
         assertThat(client(new StubServerSource(base(wire), base(second))).station(STATION, deadline()).value()).isPresent();
         assertThat(metrics.requests).extracting(r -> r.get(2)).containsExactly("timeout", "ok");
@@ -260,5 +260,232 @@ class HttpRadioBrowserClientTest {
                 .isInstanceOfSatisfying(CatalogueUnavailableException.class,
                         e -> assertThat(e.serversTried()).containsExactly("localhost:" + wire.port()));
         assertThat(second.getAllServeEvents()).isEmpty();
+    }
+
+    // ---- search (RADIO-002) --------------------------------------------------------------------
+
+    private static final String SEARCH = "/json/stations/search";
+
+    private static StationQuery query(String name, String tag, String language, String countryCode, String codec,
+                                      Integer bitrateMin, StationOrder order, SortDirection direction, int limit,
+                                      int offset) {
+        return new StationQuery(name, tag, language, countryCode, codec, bitrateMin, order, direction, limit, offset);
+    }
+
+    private static StationQuery plain() {
+        return query(null, null, null, null, null, null, StationOrder.VOTES, SortDirection.DESC, 20, 0);
+    }
+
+    private void searchReturns(String fixture) {
+        wire.stubFor(get(urlPathEqualTo(SEARCH)).willReturn(aResponse().withBody(Fixtures.load(fixture))));
+    }
+
+    private com.github.tomakehurst.wiremock.verification.LoggedRequest onlySearchRequest() {
+        List<com.github.tomakehurst.wiremock.verification.LoggedRequest> requests =
+                wire.findAll(getRequestedFor(urlPathEqualTo(SEARCH)));
+        assertThat(requests).hasSize(1);
+        return requests.get(0);
+    }
+
+    @Test
+    void searchAlwaysSendsHidebrokenLimitOffsetOrderAndReverse() {
+        searchReturns("search-page.json");
+        StationQuery q = query(null, null, null, null, null, null, StationOrder.VOTES, SortDirection.DESC, 10, 30);
+        client(new StubServerSource(base(wire))).search(q, deadline());
+        var request = onlySearchRequest();
+        assertThat(request.queryParameter("hidebroken").values()).containsExactly("true");
+        assertThat(request.queryParameter("limit").values()).containsExactly("10");
+        assertThat(request.queryParameter("offset").values()).containsExactly("30");
+        assertThat(request.queryParameter("order").values()).containsExactly("votes");
+        assertThat(request.queryParameter("reverse").values()).containsExactly("true");
+        assertThat(request.queryParameter("name").isPresent()).isFalse();
+        assertThat(request.queryParameter("tag").isPresent()).isFalse();
+        assertThat(request.queryParameter("tagExact").isPresent()).isFalse();
+    }
+
+    @Test
+    void ascendingIsReverseFalseAndItIsAlwaysSent() {
+        searchReturns("search-page.json");
+        client(new StubServerSource(base(wire)))
+                .search(query(null, null, null, null, null, null, StationOrder.NAME, SortDirection.ASC, 5, 0), deadline());
+        var request = onlySearchRequest();
+        assertThat(request.queryParameter("reverse").values()).containsExactly("false");
+        assertThat(request.queryParameter("order").values()).containsExactly("name");
+    }
+
+    @Test
+    void everyFilterIsSentUnderTheCataloguesName() {
+        searchReturns("search-page.json");
+        client(new StubServerSource(base(wire))).search(
+                query("kiss", "jazz", "ukrainian", "UA", "AAC+", 96, StationOrder.BITRATE, SortDirection.ASC, 20, 0),
+                deadline());
+        var request = onlySearchRequest();
+        assertThat(request.queryParameter("name").values()).containsExactly("kiss");
+        assertThat(request.queryParameter("tag").values()).containsExactly("jazz");
+        assertThat(request.queryParameter("tagExact").values()).containsExactly("true");
+        assertThat(request.queryParameter("language").values()).containsExactly("ukrainian");
+        assertThat(request.queryParameter("languageExact").values()).containsExactly("true");
+        assertThat(request.queryParameter("countrycode").values()).containsExactly("UA");
+        assertThat(request.queryParameter("codec").values()).containsExactly("AAC+");
+        assertThat(request.queryParameter("bitrateMin").values()).containsExactly("96");
+        assertThat(request.queryParameter("order").values()).containsExactly("bitrate");
+    }
+
+    @Test
+    void clickCountIsSentAsClickcount() {
+        searchReturns("search-page.json");
+        client(new StubServerSource(base(wire)))
+                .search(query(null, null, null, null, null, null, StationOrder.CLICK_COUNT, SortDirection.DESC, 20, 0),
+                        deadline());
+        assertThat(onlySearchRequest().queryParameter("order").values()).containsExactly("clickcount");
+    }
+
+    @Test
+    void clientValuesArePercentEncodedAsUtf8() {
+        searchReturns("search-page.json");
+        String awkward = "\u0420\u0430\u0434\u0456\u043e & a=b + c";
+        client(new StubServerSource(base(wire)))
+                .search(query(awkward, null, null, null, null, null, StationOrder.VOTES, SortDirection.DESC, 20, 0),
+                        deadline());
+        var request = onlySearchRequest();
+        String raw = request.getUrl();
+        assertThat(raw).contains("name=%D0%A0%D0%B0%D0%B4%D1%96%D0%BE%20%26%20a%3Db%20%2B%20c");
+        assertThat(request.queryParameter("name").values()).containsExactly(awkward);
+        assertThat(request.queryParameter("tag").isPresent()).isFalse();
+    }
+
+    @Test
+    void theAnswerIsAPageWithEveryElementCountedAsReceived() {
+        searchReturns("search-page.json");
+        CatalogueAnswer<StationPage> answer = client(new StubServerSource(base(wire))).search(plain(), deadline());
+        assertThat(answer.value().received()).isEqualTo(3);
+        assertThat(answer.value().stations()).hasSize(3);
+        assertThat(answer.value().stations().get(0).name()).isEqualTo("Alpha FM");
+        assertThat(answer.value().stations().get(1).codecLabel()).isEqualTo("AAC+");
+        assertThat(answer.value().stations().get(2).hls()).isTrue();
+        assertThat(answer.value().stations().get(0).streamUrl()).isEqualTo("https://s.example.test/AlphaFM.mp3");
+    }
+
+    @Test
+    void anElementThatIsNotAnObjectOrHasNoValidUuidIsDroppedButCounted() {
+        searchReturns("search-dirty.json");
+        StationPage page = client(new StubServerSource(base(wire))).search(plain(), deadline()).value();
+        assertThat(page.received()).isEqualTo(5);
+        assertThat(page.stations()).extracting(Station::name).containsExactly("Alpha FM", "Wrong Types");
+    }
+
+    @Test
+    void wrongTypedFieldsOfAKeptStationCountAsMissing() {
+        searchReturns("search-dirty.json");
+        Station s = client(new StubServerSource(base(wire))).search(plain(), deadline()).value().stations().get(1);
+        assertThat(s.favicon()).isNull();
+        assertThat(s.tags()).isNull();
+        assertThat(s.languages()).isNull();
+        assertThat(s.votes()).isZero();
+        assertThat(s.bitrate()).isZero();
+        assertThat(s.lastCheckOk()).isFalse();
+        assertThat(s.hls()).isFalse();
+    }
+
+    @Test
+    void anEmptyArrayIsAnEmptyPage() {
+        searchReturns("search-empty.json");
+        StationPage page = client(new StubServerSource(base(wire))).search(plain(), deadline()).value();
+        assertThat(page.received()).isZero();
+        assertThat(page.stations()).isEmpty();
+    }
+
+    @Test
+    void aBodyThatIsNotAnArrayIsAProtocolError() {
+        wire.stubFor(get(urlPathEqualTo(SEARCH)).willReturn(aResponse().withBody("{\"error\":true}")));
+        assertThatThrownBy(() -> client(new StubServerSource(base(wire))).search(plain(), deadline()))
+                .isInstanceOf(CatalogueProtocolException.class);
+    }
+
+    @Test
+    void theMetricEndpointIsSearch() {
+        searchReturns("search-page.json");
+        client(new StubServerSource(base(wire))).search(plain(), deadline());
+        assertThat(metrics.requests).containsExactly(List.of("localhost:" + wire.port(), "search", "ok"));
+    }
+
+    // ---- browse lists (RADIO-002) --------------------------------------------------------------
+
+    private void stubList(String path, String fixture) {
+        wire.stubFor(get(urlPathEqualTo(path)).willReturn(aResponse().withBody(Fixtures.load(fixture))));
+    }
+
+    @Test
+    void countriesAskForTheWholeListOrderedByStationCount() {
+        stubList("/json/countries", "countries.json");
+        CatalogueAnswer<List<Country>> answer = client(new StubServerSource(base(wire))).countries(deadline());
+        var request = wire.findAll(getRequestedFor(urlPathEqualTo("/json/countries"))).get(0);
+        assertThat(request.queryParameter("hidebroken").values()).containsExactly("true");
+        assertThat(request.queryParameter("order").values()).containsExactly("stationcount");
+        assertThat(request.queryParameter("reverse").values()).containsExactly("true");
+        assertThat(request.queryParameter("limit").values()).containsExactly("2000");
+        assertThat(answer.value()).extracting(Country::code).containsExactly("US", "UA", "x1");
+        assertThat(answer.value().get(0).name()).isEqualTo("The United States Of America");
+        assertThat(answer.value().get(0).stationCount()).isEqualTo(6947);
+        assertThat(metrics.requests).containsExactly(List.of("localhost:" + wire.port(), "countries", "ok"));
+    }
+
+    @Test
+    void languagesKeepAnEntryWithNoCodeAndDropOneWithNoName() {
+        stubList("/json/languages", "languages.json");
+        CatalogueAnswer<List<Language>> answer = client(new StubServerSource(base(wire))).languages(deadline());
+        var request = wire.findAll(getRequestedFor(urlPathEqualTo("/json/languages"))).get(0);
+        assertThat(request.queryParameter("limit").values()).containsExactly("2000");
+        assertThat(request.queryParameter("order").values()).containsExactly("stationcount");
+        assertThat(answer.value()).extracting(Language::name)
+                .containsExactly("english", "american english", "ukrainian");
+        assertThat(answer.value().get(1).code()).isNull();
+        assertThat(answer.value().get(2).stationCount()).isZero();
+        assertThat(metrics.requests.get(0).get(1)).isEqualTo("languages");
+    }
+
+    @Test
+    void tagsAreAskedForAPageWithLimitAndOffset() {
+        stubList("/json/tags", "tags-page.json");
+        CatalogueAnswer<TagPage> answer = client(new StubServerSource(base(wire))).tags(new TagQuery(null, 20, 40), deadline());
+        var request = wire.findAll(getRequestedFor(urlPathEqualTo("/json/tags"))).get(0);
+        assertThat(request.queryParameter("hidebroken").values()).containsExactly("true");
+        assertThat(request.queryParameter("order").values()).containsExactly("stationcount");
+        assertThat(request.queryParameter("reverse").values()).containsExactly("true");
+        assertThat(request.queryParameter("limit").values()).containsExactly("20");
+        assertThat(request.queryParameter("offset").values()).containsExactly("40");
+        assertThat(answer.value().received()).isEqualTo(5);
+        assertThat(answer.value().tags()).extracting(TagCount::name).containsExactly("jazz", "smooth jazz", "acid jazz");
+        assertThat(metrics.requests.get(0).get(1)).isEqualTo("tags");
+    }
+
+    @Test
+    void aTagFilterIsOnePercentEncodedPathSegment() {
+        wire.stubFor(get(com.github.tomakehurst.wiremock.client.WireMock.urlPathMatching("/json/tags/.*"))
+                .willReturn(aResponse().withBody(Fixtures.load("tags-page.json"))));
+        client(new StubServerSource(base(wire))).tags(new TagQuery("r&b / \u0434\u0436\u0430\u0437", 10, 0), deadline());
+        var request = wire.getAllServeEvents().get(0).getRequest();
+        assertThat(request.getUrl()).startsWith("/json/tags/r%26b%20%2F%20%D0%B4%D0%B6%D0%B0%D0%B7?");
+        assertThat(request.queryParameter("limit").values()).containsExactly("10");
+    }
+
+    @Test
+    void aNonArrayBodyOfAnyListIsAProtocolError() {
+        wire.stubFor(get(urlPathEqualTo("/json/countries")).willReturn(aResponse().withBody("{}")));
+        wire.stubFor(get(urlPathEqualTo("/json/languages")).willReturn(aResponse().withBody("\"x\"")));
+        wire.stubFor(get(urlPathEqualTo("/json/tags")).willReturn(aResponse().withBody("null")));
+        HttpRadioBrowserClient client = client(new StubServerSource(base(wire)));
+        assertThatThrownBy(() -> client.countries(deadline())).isInstanceOf(CatalogueProtocolException.class);
+        assertThatThrownBy(() -> client.languages(deadline())).isInstanceOf(CatalogueProtocolException.class);
+        assertThatThrownBy(() -> client.tags(new TagQuery(null, 20, 0), deadline()))
+                .isInstanceOf(CatalogueProtocolException.class);
+    }
+
+    @Test
+    void anEmptyTagPageIsEmptyWithNothingReceived() {
+        stubList("/json/tags", "tags-empty.json");
+        TagPage page = client(new StubServerSource(base(wire))).tags(new TagQuery(null, 20, 0), deadline()).value();
+        assertThat(page.tags()).isEmpty();
+        assertThat(page.received()).isZero();
     }
 }

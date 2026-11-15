@@ -29,21 +29,25 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Finds the catalogue's mirrors lazily, on the first request: DNS first (forward lookup of the
  * discovery host, reverse lookup of each address), then {@code /json/servers} when DNS gave no
- * usable names. The list is cached for {@code server-list-ttl}, replaced whole and never locked
- * across a lookup. Discovery as a whole may use at most half of {@code resolve-timeout}, and the DNS
- * lookup runs off the calling thread: JDK lookups have no timeout, and a late answer is kept for the
- * next request instead of being thrown away.
+ * usable names. The list is replaced whole and never locked across a lookup. A list older than
+ * {@code server-list-ttl} is still used at once while one background refresh (at most half of
+ * {@code resolve-timeout}) replaces it; with no list, or when every server failed, discovery runs inside
+ * the request and may use at most half of what that request has left. The DNS lookup runs off the
+ * calling thread: JDK lookups have no timeout, and a late answer is kept for the next request instead
+ * of being thrown away.
  */
 public class DiscoveredServerSource implements ServerSource, AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(DiscoveredServerSource.class);
     private static final String NAME_SUFFIX = ".api.radio-browser.info";
+    private static final Duration REFRESH_PAUSE = Duration.ofSeconds(60);
 
     /** A discovered list. {@code seq} orders discoveries by when they started. */
     private record ServerList(List<CatalogueServer> servers, Instant discoveredAt, long seq, int next, boolean stale) {
@@ -72,6 +76,8 @@ public class DiscoveredServerSource implements ServerSource, AutoCloseable {
     });
     private final AtomicReference<ServerList> list = new AtomicReference<>();
     private final AtomicLong sequence = new AtomicLong();
+    private final AtomicBoolean refreshing = new AtomicBoolean();
+    private final AtomicReference<Instant> refreshPausedUntil = new AtomicReference<>(Instant.MIN);
 
     /** Creates the source; nothing is looked up until {@link #servers(Deadline)} is first called. */
     public DiscoveredServerSource(RadioProperties properties, DnsResolver dns, CatalogueHttp http, ObjectMapper mapper,
@@ -89,11 +95,58 @@ public class DiscoveredServerSource implements ServerSource, AutoCloseable {
     @Override
     public List<CatalogueServer> servers(Deadline deadline) {
         ServerList current = list.get();
-        if (current != null && !current.stale()
-                && Duration.between(current.discoveredAt(), clock.instant()).compareTo(properties.getServerListTtl()) < 0) {
+        if (current != null && !current.stale()) {
+            if (Duration.between(current.discoveredAt(), clock.instant()).compareTo(properties.getServerListTtl()) >= 0) {
+                // Past its time-to-live the list is still good enough: use it now and look again in the
+                // background, so that an hourly lookup on a network with slow DNS never makes a
+                // request (a play, a search) wait for it.
+                startRefresh();
+            }
             return rotated(current);
         }
         return discover(deadline);
+    }
+
+    /** Whether a background refresh is running; for tests, which wait for it to finish. */
+    boolean refreshInProgress() {
+        return refreshing.get();
+    }
+
+    private void startRefresh() {
+        if (clock.instant().isBefore(refreshPausedUntil.get()) || !refreshing.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            executor.execute(this::refresh);
+        } catch (RuntimeException e) {
+            refreshing.set(false);
+        }
+    }
+
+    /**
+     * One background refresh: DNS, then the server-list fallback, bounded by half of
+     * {@code resolve-timeout}. A failure leaves the old list in place and pauses further tries for a
+     * minute, so a broken network is not hammered by every request.
+     */
+    private void refresh() {
+        boolean found = false;
+        try {
+            long seq = sequence.incrementAndGet();
+            Deadline discovery = Deadline.after(clock, properties.getResolveTimeout().dividedBy(2));
+            found = !dnsDiscovery(seq, discovery).isEmpty() || !serverListDiscovery(seq, discovery).isEmpty();
+        } catch (RuntimeException e) {
+            LOG.debug("Background refresh of the catalogue server list failed", e);
+        } finally {
+            if (!found) {
+                refreshPausedUntil.set(clock.instant().plus(REFRESH_PAUSE));
+            }
+            refreshing.set(false);
+        }
+    }
+
+    /** What a request may spend on discovery: half of what it has left, so some is left for its own call. */
+    static Duration shareOf(Duration remaining) {
+        return remaining.dividedBy(2);
     }
 
     @Override
@@ -129,9 +182,7 @@ public class DiscoveredServerSource implements ServerSource, AutoCloseable {
 
     private List<CatalogueServer> discover(Deadline callerDeadline) {
         long seq = sequence.incrementAndGet();
-        Duration share = callerDeadline.remaining().compareTo(properties.getResolveTimeout().dividedBy(2)) < 0
-                ? callerDeadline.remaining() : properties.getResolveTimeout().dividedBy(2);
-        Deadline discovery = Deadline.after(clock, share);
+        Deadline discovery = Deadline.after(clock, shareOf(callerDeadline.remaining()));
 
         List<CatalogueServer> fromDns = dnsDiscovery(seq, discovery);
         if (!fromDns.isEmpty()) {

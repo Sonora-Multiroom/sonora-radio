@@ -18,12 +18,19 @@ import multiroom.radio.metrics.NoopRadioMetrics;
 import multiroom.radio.metrics.RadioMetrics;
 import multiroom.radio.resolve.CodecPolicy;
 import multiroom.radio.resolve.RadioStationResolver;
+import multiroom.radio.rest.RadioCatalogueService;
+import multiroom.radio.rest.RadioStationMapper;
+import multiroom.radio.rest.advice.RadioExceptionHandler;
+import multiroom.radio.rest.controller.RadioBrowseController;
+import multiroom.radio.rest.controller.RadioFallbackController;
+import multiroom.radio.rest.controller.RadioStationsController;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -80,6 +87,47 @@ public class RadioAutoConfiguration {
     RadioStationResolver radioStationResolver(RadioBrowserClient client, ObjectProvider<SupportedCodecRegistry> codecs,
                                               RadioProperties properties, RadioMetrics metrics) {
         return new RadioStationResolver(client, new CodecPolicy(codecs), properties, metrics, Clock.systemUTC());
+    }
+
+    /**
+     * The REST layer. Only in a servlet web application, so the resolver still works on a host
+     * without Spring MVC; declared as beans rather than found by a scan, like everything else here,
+     * so that "disabled contributes nothing" is provable.
+     */
+    @Configuration(proxyBeanMethods = false)
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
+    static class RadioWebConfiguration {
+
+        @Bean
+        RadioStationMapper radioStationMapper() {
+            return new RadioStationMapper();
+        }
+
+        @Bean
+        RadioCatalogueService radioCatalogueService(RadioBrowserClient client, RadioStationMapper mapper,
+                                                    RadioProperties properties) {
+            return new RadioCatalogueService(client, mapper, properties, Clock.systemUTC());
+        }
+
+        @Bean
+        RadioStationsController radioStationsController(RadioCatalogueService service) {
+            return new RadioStationsController(service);
+        }
+
+        @Bean
+        RadioBrowseController radioBrowseController(RadioCatalogueService service) {
+            return new RadioBrowseController(service);
+        }
+
+        @Bean
+        RadioFallbackController radioFallbackController() {
+            return new RadioFallbackController();
+        }
+
+        @Bean
+        RadioExceptionHandler radioExceptionHandler() {
+            return new RadioExceptionHandler();
+        }
     }
 
     /**

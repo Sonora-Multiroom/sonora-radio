@@ -1,5 +1,6 @@
 package multiroom.radio.resolve;
 
+import multiroom.radio.text.Text;
 import multiroom.api.io.resolve.SupportedCodecRegistry;
 import org.springframework.beans.factory.ObjectProvider;
 

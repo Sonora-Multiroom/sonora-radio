@@ -22,8 +22,8 @@ import java.util.concurrent.TimeoutException;
 /**
  * The transport shared by the catalogue client and the server discovery fallback. One JDK
  * {@link HttpClient}, built on first use (building it opens no connection). Each attempt is sent
- * asynchronously and awaited for at most the smaller of {@code connect-timeout + read-timeout} and
- * what is left of the deadline: the JDK client's own timeouts do not cover a body that stalls after
+ * asynchronously and awaited for at most the smallest of {@code connect-timeout + read-timeout}, the
+ * deadline's attempt limit (when it has one) and what is left of the deadline: the JDK client's own timeouts do not cover a body that stalls after
  * the headers, so the wait is what bounds the call.
  */
 public class CatalogueHttp {
@@ -76,12 +76,12 @@ public class CatalogueHttp {
     public Attempt get(URI uri, Deadline deadline) {
         // Built (once) before the wait is worked out, so that a cold start's cost is charged to the deadline.
         HttpClient httpClient = client();
-        Duration wait = deadline.cap(properties.getConnectTimeout().plus(properties.getReadTimeout()));
+        Duration wait = deadline.attemptCap(properties.getConnectTimeout().plus(properties.getReadTimeout()));
         if (wait.isZero()) {
             return new Attempt(RadioMetrics.RESULT_TIMEOUT, null);
         }
-        LOG.debug("GET {} User-Agent: {}", uri, userAgent);
-        Duration requestTimeout = deadline.cap(properties.getReadTimeout());
+        LOG.debug("GET {} User-Agent: {}", loggable(uri), userAgent);
+        Duration requestTimeout = deadline.attemptCap(properties.getReadTimeout());
         if (requestTimeout.isZero()) {
             requestTimeout = Duration.ofMillis(1);
         }
@@ -117,6 +117,19 @@ public class CatalogueHttp {
             }
             return new Attempt(RadioMetrics.RESULT_CONNECT_ERROR, null);
         }
+    }
+
+    /**
+     * The address without its query and without a client's filter: those are text a client or the
+     * catalogue chose and must not reach the log. Keeps the host and the endpoint ({@code /json/tags}
+     * for a filtered tag list, since its filter is the next path segment).
+     */
+    static String loggable(URI uri) {
+        String path = uri.getRawPath() == null ? "" : uri.getRawPath();
+        String[] segments = path.split("/");
+        int keep = segments.length > 2 && "tags".equals(segments[2]) ? 3 : Math.min(segments.length, 4);
+        String endpoint = String.join("/", java.util.Arrays.copyOfRange(segments, 0, keep));
+        return uri.getScheme() + "://" + uri.getRawAuthority() + endpoint;
     }
 
     private static Attempt classify(HttpResponse<String> response) {

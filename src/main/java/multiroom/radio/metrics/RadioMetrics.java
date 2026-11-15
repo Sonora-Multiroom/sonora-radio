@@ -23,6 +23,10 @@ public interface RadioMetrics {
     String ENDPOINT_STATION = "station";
     String ENDPOINT_PLAY = "play";
     String ENDPOINT_SERVERS = "servers";
+    String ENDPOINT_SEARCH = "search";
+    String ENDPOINT_COUNTRIES = "countries";
+    String ENDPOINT_LANGUAGES = "languages";
+    String ENDPOINT_TAGS = "tags";
 
     String RESULT_OK = "ok";
     String RESULT_TIMEOUT = "timeout";

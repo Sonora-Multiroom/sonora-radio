@@ -168,4 +168,37 @@ class CatalogueHttpTest {
         new CatalogueHttp(properties);
         assertThat(wire.getAllServeEvents()).isEmpty();
     }
+
+    @Test
+    void anAttemptLimitGivesUpOnAStalledServerNearTheLimitAndCountsATimeout() {
+        wire.stubFor(get("/slow").willReturn(aResponse().withFixedDelay(3000).withBody("late")));
+        Deadline limited = Deadline.after(Clock.systemUTC(), Duration.ofSeconds(5), Duration.ofMillis(300));
+        long start = System.nanoTime();
+        CatalogueHttp.Attempt attempt = new CatalogueHttp(properties).get(url("/slow"), limited);
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+        assertThat(attempt.result()).isEqualTo("timeout");
+        assertThat(elapsed).isGreaterThanOrEqualTo(Duration.ofMillis(250)).isLessThan(Duration.ofMillis(1000));
+    }
+
+    @Test
+    void withNoAttemptLimitTheConfiguredTimeoutsStillApply() {
+        properties.setConnectTimeout(Duration.ofMillis(300));
+        properties.setReadTimeout(Duration.ofMillis(500));
+        wire.stubFor(get("/slow").willReturn(aResponse().withFixedDelay(3000).withBody("late")));
+        long start = System.nanoTime();
+        CatalogueHttp.Attempt attempt = new CatalogueHttp(properties).get(url("/slow"), deadline());
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+        assertThat(attempt.result()).isEqualTo("timeout");
+        assertThat(elapsed).isGreaterThanOrEqualTo(Duration.ofMillis(500)).isLessThan(Duration.ofMillis(1500));
+    }
+
+    @Test
+    void aBodyThatStallsAfterTheHeadersIsAlsoBoundedByTheAttemptLimit() {
+        wire.stubFor(get("/stall").willReturn(aResponse().withBody("x".repeat(100)).withChunkedDribbleDelay(10, 5000)));
+        Deadline limited = Deadline.after(Clock.systemUTC(), Duration.ofSeconds(5), Duration.ofMillis(300));
+        long start = System.nanoTime();
+        CatalogueHttp.Attempt attempt = new CatalogueHttp(properties).get(url("/stall"), limited);
+        assertThat(attempt.result()).isEqualTo("timeout");
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(1200));
+    }
 }

@@ -13,6 +13,13 @@ public final class Fixtures {
     private Fixtures() {
     }
 
+    /** A station with the fields a play needs and neutral values for the rest. */
+    public static multiroom.radio.catalogue.Station station(UUID uuid, String name, String streamUrl, String codec,
+                                                            boolean hls) {
+        return new multiroom.radio.catalogue.Station(uuid, name, streamUrl, codec, hls,
+                null, null, null, null, null, 0, true, 0, 0);
+    }
+
     public static String load(String name) {
         try (InputStream in = Fixtures.class.getResourceAsStream("/radiobrowser/" + name)) {
             if (in == null) {
