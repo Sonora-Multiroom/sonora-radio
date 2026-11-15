@@ -99,14 +99,14 @@ Only successful answers are stored. Everything is lost on a hub restart.
 |---|---|---|
 | none yet | discovery inside the request, bounded by half of what the caller has left | the result is stored |
 | fresh | the list, starting at the server that last answered | nothing |
-| expired | the same list, at once | one refresh starts in the background; on failure the list stays and no refresh is tried for 60 s |
+| expired | the same list, at once | one refresh starts in the background, given up after half of `resolve-timeout`; on failure the list stays and no refresh is tried for 60 s |
 | all servers failed | discovery inside the request, as for "none yet" | the result replaces the list |
 
 ## Errors
 
 | Exception | Raised by | Answer |
 |---|---|---|
-| `InvalidParameterException(parameter, reason)` | the parsers, `RequestParameters`, `StationUuid` | 400 |
+| `InvalidParameterException(parameter, reason)` | the parsers, `RequestParameters`, `RadioCatalogueService` (when `StationUuid` finds no UUID) | 400 |
 | `StationNotFoundException(uuid)` | `RadioCatalogueService` | 404 |
 | `CatalogueProtocolException` (RADIO-001) | the catalogue client | 502 |
 | `CatalogueUnavailableException` (RADIO-001) | the catalogue client, the server source | 503 with `Retry-After: 30` |
@@ -128,3 +128,5 @@ Only successful answers are stored. Everything is lost on a hub restart.
 | Attempt limit | half of `request-timeout` |
 | `Retry-After` on 503 | 30 seconds |
 | Pause after a failed background refresh | 60 seconds |
+| Longest background refresh | half of `resolve-timeout` |
+| Client text echoed in an error (a value, an unknown parameter's name) | 32 characters |

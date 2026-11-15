@@ -31,8 +31,8 @@ and language lists and at most 200 tag pages, each time-limited
 **Testing**: JUnit 5, Mockito, AssertJ, `@WebMvcTest` slices for the controllers and the advice,
 `ApplicationContextRunner` for wiring, WireMock 3.9.2 with hand-written fixtures in
 `src/test/resources/radiobrowser/` shaped like the live answers recorded in `verification.md`;
-JaCoCo 80% line gate for the module and 90% for `resolve`, `catalogue`, `catalogue.servers` and
-the new `rest`
+JaCoCo 80% line gate for the module and 90% for `resolve`, `catalogue`, `catalogue.servers`, the
+new `text`, and the new `rest` with each of its sub-packages
 
 **Target Platform**: the hub's JVM on Raspberry Pi OS (ARM64) in production; Windows for
 development
@@ -59,15 +59,15 @@ one deviation listed under Complexity Tracking.*
 |---|---|
 | I Clean code | Thin controllers; one parser per query; one mapper for cleaning; one service that owns the deadline and `nextOffset`; the bounded time-limited map written once (`BoundedTtlCache`) |
 | II Java 17 / host Spring | Spring MVC and Swagger annotations `provided`; JDK `HttpClient`; beans declared in `RadioAutoConfiguration` |
-| III Test-first | Each task starts with a failing test; `@WebMvcTest` for controllers; WireMock for the catalogue; short configured timeouts, no real waits; 90% gate on `rest` (JSON to DTO mapping) |
+| III Test-first | Each task starts with a failing test; `@WebMvcTest` for controllers; WireMock for the catalogue; short configured timeouts, no real waits; 90% gate on `rest` and its sub-packages (JSON to DTO mapping, parsers, errors) and on `text`; the OpenAPI annotations are written after the test that describes them |
 | IV SOLID | `RadioBrowserClient` stays the one interface in front of HTTP, used by the resolver and the API; server discovery stays behind `ServerSource`; metrics behind `RadioMetrics` |
 | V Quality, two-part gate | `mvn verify` green **and** the live inventory check (quickstart part 2, step 1), with permission |
 | VI Git | Branch `002-station-search-api`; Conventional Commits; PR; tag `v0.2.0` after merge |
-| VII Cross-platform | No new platform-dependent code; UUIDs compared in lower case |
+| VII Cross-platform | No new platform-dependent code; UUIDs compared in lower case. The play path changes (server list, attempt limit, station cache), so one play is verified on the Pi before merge (quickstart part 2, step 8, with permission), unless RADIO-001's live verification ran on this build |
 | VIII Extension boundary | `multiroom-api` only; no root config file; controllers conditional on a servlet web application and on `multiroom.radio.enabled`; `@RestControllerAdvice` scoped with `assignableTypes` to this module's API interfaces; problem details; the one new setting fails start-up when not positive. The constitution's example "a result-limit cap outside its allowed range" does not arise: the cap is a fixed value, not a setting (spec, Assumptions) |
 | IX Good citizen | Same `User-Agent`, discovery and failover; every list and search request sends an explicit `limit` (at most 100 for searches and tag pages, 2000 for the two short lists); lists cached 6 h; nothing requested unless a client asked (the server-list refresh starts only on a request); `/json/url` is never called by the API. "Capped whatever the client asks" is met by refusing a larger `limit` with 400, so nothing above the cap is ever sent |
 | X Untrusted catalogue | UUIDs and every parameter validated before any request; client values percent-encoded; names, tags, languages and addresses bounded and stripped in `RadioStationMapper`; `favicon` and `homepage` returned only as `http(s)` and never fetched; own DTOs; tolerant `JsonNode` mapping; no catalogue or client text in metric tags or logs |
-| XI Hub keeps working | 5 s budget with a per-attempt limit; 503 as a problem detail; an expired server list no longer makes a request (or a play) wait; request threads only, no shared lock across I/O |
+| XI Hub keeps working | 5 s budget with an attempt limit; 503 as a problem detail; an expired server list no longer makes a request (or a play) wait; request threads only, no shared lock across I/O |
 | XII No live service in tests | WireMock and injected DNS only. Live checks once, by hand, recorded in `verification.md`. Two of them were run before the build: see Complexity Tracking |
 
 ## Project Structure
@@ -93,13 +93,14 @@ specs/002-station-search-api/
 ### Source Code (repository root)
 
 ```text
-pom.xml                                   # version 0.2.0; + spring-boot-starter-web, swagger-annotations-jakarta (provided); JaCoCo 90% rule for rest
+pom.xml                                   # version 0.2.0; + spring-boot-starter-web, swagger-annotations-jakarta (provided); JaCoCo 90% rule for rest* and text
 src/main/java/multiroom/radio/
 ├── RadioAutoConfiguration.java           # CHANGED: nested web configuration declaring the service, controllers and advice
 ├── config/
 │   └── RadioProperties.java              # CHANGED: request-timeout (5s, positive)
 ├── text/
-│   └── Text.java                         # MOVED from resolve, made public
+│   ├── Text.java                         # MOVED from resolve, made public
+│   └── StationTitle.java                 # MOVED from resolve
 ├── resolve/                              # unchanged behaviour; StationReference uses StationUuid
 ├── catalogue/
 │   ├── RadioBrowserClient.java           # CHANGED: + search, countries, languages, tags
@@ -146,20 +147,23 @@ src/test/resources/radiobrowser/          # + search-*.json, countries.json, lan
 
 **Structure Decision**: the single Maven module stays; the API is one new package, `rest`, that
 depends on `catalogue` only through `RadioBrowserClient` and its value types, as `resolve` does.
-`rest` and `resolve` do not depend on each other; what they share (`Text`, `StationUuid`) moves
-below both.
+`rest` and `resolve` do not depend on each other; what they share (`Text` and `StationTitle` in
+`text`, `StationUuid` in `catalogue`) moves below both.
 
 ## Delivery notes
 
-- **Order**: (1) foundations with no behaviour change for plays: `Text` and `StationUuid` moves,
+- **Order**: (1) foundations with no behaviour change for plays: `Text`, `StationTitle` and `StationUuid` moves,
   `BoundedTtlCache` extraction, `Deadline` attempt limit, `request-timeout`; (2) server-list
   changes in `DiscoveredServerSource`; (3) catalogue calls and the grown `Station`; (4) search end
   to end (parser, service, mapper, controller, advice): the P1 story, usable alone; (5) one
   station; (6) lists and their cache; (7) fallback handler, API description, metrics and logs;
   (8) version 0.2.0 and live verification. Each step is test-first, and RADIO-001's suite stays
   green throughout.
-- **Step 2 changes how plays behave** (an expired list no longer delays a play). RADIO-001's live
-  verification is still pending and will run against this behaviour.
+- **Step 2 changes how plays behave**: an expired list no longer delays a play, and discovery
+  inside a play that has less than its full budget left gets half of what is left (RADIO-001 gave
+  it up to half of `resolve-timeout`). RADIO-001's live verification is still pending and will run
+  against this behaviour; if it has not run on this build by the time this feature is verified,
+  quickstart part 2 step 8 plays one station instead. One of the two is required before merge.
 - **Live verification** follows [quickstart.md](quickstart.md) part 2 and needs the owner's
   permission for the deploy and the restart.
 - **After merge**: delete `docs/backlog/station-search-api.md` or trim it to what remains (the

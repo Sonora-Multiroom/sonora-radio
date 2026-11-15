@@ -375,8 +375,10 @@ the extension off, restart, and see the requests answer "not found" while the hu
   equal to, what a search returns. The country and language lists are returned whole, as plain
   lists; the extension asks the catalogue for them with a fixed limit of 2000, larger than either
   list (225 countries and 585 languages on 2026-11-15).
-- **FR-015**: The tag list MUST accept an optional `name` filter and `limit` and `offset` with the
-  same defaults, caps and validation as search, and MUST answer in the same form
+- **FR-015**: The tag list MUST accept an optional `name` filter, which matches any part of a
+  tag's name and ignores letter case (unlike a search's `tag`, which matches the whole tag), and
+  `limit` and `offset` with the same defaults, caps and validation as search, and MUST answer in
+  the same form
   (`RadioTagPage`: `tags` and `nextOffset`, worked out as in search).
 - **FR-016**: Entries without a usable identity (a country without a valid two-letter code, a tag
   or language without a name) MUST be dropped.
@@ -423,8 +425,9 @@ the extension off, restart, and see the requests answer "not found" while the hu
 **Catalogue use**
 
 - **FR-025**: One request, server discovery and failover included, MUST be bounded by a time budget
-  of its own (default 5 seconds, a setting), separate from and shorter than the budget for playing
-  a station. Each attempt on one server MUST also have a shorter bound, half the request's budget
+  of its own (default 5 seconds, a setting), separate from the budget for playing a station and,
+  with the default settings, shorter than it (the two settings are not checked against each
+  other). Each attempt on one server MUST also have an attempt limit, half the request's budget
   (2.5 seconds by default), so that a slow first server leaves time for the next.
 - **FR-026**: Catalogue requests MUST reuse RADIO-001's server discovery, failover, pinned server
   list and user agent, and MUST always state an explicit result limit to the catalogue. RADIO-001
@@ -450,7 +453,7 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **FR-030**: The request time budget MUST be a setting under `multiroom.radio.*` with a working
   default; a value that is zero or negative MUST fail hub start-up with a message naming the
   extension and the setting. The limit and offset bounds and the list lifetime are fixed values;
-  the per-attempt bound follows from the budget.
+  the attempt limit follows from the budget.
 - **FR-031**: The extension MUST count catalogue requests by kind (`search`, `countries`,
   `languages`, `tags`, alongside RADIO-001's) and outcome, with no search text, station names or
   UUIDs in metric tags, and work unchanged when the hub has no metrics registry.
@@ -494,7 +497,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
   throughout.
 - **SC-005**: 100% of invalid requests (UUID, country code, ordering, limit, offset, bitrate) are
   refused without the catalogue being contacted.
-- **SC-006**: No single request can ask the catalogue for more than 100 results, and repeating a
+- **SC-006**: No search and no tag page can ask the catalogue for more than 100 results (the
+  country and language lists are asked for whole, with a fixed limit of 2000), and repeating a
   browse list within its lifetime costs the catalogue nothing.
 - **SC-007**: A client that pages by following `nextOffset` until it is empty, dropping stations
   whose `uuid` it has already received, shows no station twice and reaches the end of every search
@@ -557,8 +561,11 @@ Not live: "every configured server unreachable answers 503 within the time budge
 the hub keeps answering" is proved by an automated test against a stand-in catalogue. On production
 it would need pinned dead servers and two restarts for something a test proves exactly.
 
-Playing a station is RADIO-001's acceptance; this feature only checks that the `uri` from step 1
-has the form RADIO-001 accepts.
+Playing a station is RADIO-001's acceptance; this feature checks that the `uri` from step 1 has
+the form RADIO-001 accepts. Because this feature also changes the play path (the server list, the
+attempt limit, the station memory), one play of such a `uri` on the `office` output is verified on
+the Pi before merge, with the owner's permission as for anything audible, unless RADIO-001's live
+verification ran on this build.
 
 ## Assumptions
 

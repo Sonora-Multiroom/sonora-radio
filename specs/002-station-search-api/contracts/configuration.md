@@ -14,7 +14,8 @@ A value that is zero, negative or unparseable fails hub start-up with a message 
 | Property | Change |
 |---|---|
 | `server-list-ttl` | After this time the list is still used while it is looked up again in the background; it no longer makes a request wait |
-| `discovery-timeout` | Still the longest wait for the DNS lookup. Discovery inside a request is now cut off at half of the time that request has left (was: half of `resolve-timeout`); for a play with the default settings that is the same 5 s |
+| `discovery-timeout` | Still the longest wait for the DNS lookup. Discovery inside a request is now cut off at half of the time that request has left (was: half of `resolve-timeout`, or what was left if that was less); for a play that starts with discovery, with the default settings, that is the same 5 s |
+| `resolve-timeout` | Half of it also bounds a background refresh of the server list |
 | `connect-timeout`, `read-timeout` | Also apply to API requests, where the attempt limit above is usually the smaller bound |
 | `station-cache-ttl`, `station-cache-size` | Also bound how old `GET /api/radio/stations/{uuid}` may be |
 

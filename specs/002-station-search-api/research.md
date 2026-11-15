@@ -69,7 +69,8 @@ feature; "RADIO-001 R<n>" points at `specs/001-play-station-by-uuid/research.md`
   shapes this extension's errors. `Retry-After` is a fixed 30 s: the hub cannot know when a mirror
   returns, and half a minute is short enough for a person and long enough not to hammer.
 - **Detail text** never echoes a client's value longer than 32 characters and never contains
-  catalogue text; the 500 detail is a fixed sentence (the exception goes to the log).
+  catalogue text; the name of an unknown parameter is client text too, so it is reported in
+  `parameter` and `detail` without control characters and cut to 32 characters; the 500 detail is a fixed sentence (the exception goes to the log).
 - **Alternatives**: reuse `ErrorResponseV2`: impossible, it is in `multiroom-rest`. Spring's
   `ProblemDetail`: rejected, its schema name would collide across extensions in `/api-docs` and it
   cannot carry a named `parameter` without an untyped map.
@@ -82,9 +83,12 @@ feature; "RADIO-001 R<n>" points at `specs/001-play-station-by-uuid/research.md`
   as `StationPage` / `TagPage`: the kept records plus `received`, the number of records in the
   catalogue's answer before any was dropped, which is what `nextOffset` is worked out from.
 - **Untrusted text stays raw in `catalogue`** (as today for `name`); it is cleaned where it leaves
-  the extension: `StationTitle` for plays, the new `RadioStationMapper` for the API. `Text` moves
-  from `resolve` to its own package so both can use it, and the strict UUID pattern moves from
-  `StationReference` to a shared `StationUuid`.
+  the extension: `StationTitle` for plays, the new `RadioStationMapper` for the API (which uses
+  `StationTitle` for the name). `Text` and `StationTitle` move from `resolve` to a package of
+  their own, `text`, so `rest` and `resolve` can both use them without depending on each other,
+  and the strict UUID pattern moves from `StationReference` to a shared `StationUuid`. For the
+  lists the client drops only an entry with no identity at all (not an object, no text `name`, no
+  text `iso_3166_1`); whether a code or a name is valid is the mapper's rule (R9).
 - **Alternatives**: a second interface for search: rejected, two interfaces over one HTTP client
   and one decorator chain for seven methods.
 
@@ -125,8 +129,11 @@ feature; "RADIO-001 R<n>" points at `specs/001-play-station-by-uuid/research.md`
      succeeds. When it fails the old list stays, and the next refresh is not tried for 60 s.
   2. **No list, or a list whose servers all failed** (`allFailed`): discovery runs inside the
      request as today, but its share is **half of what the caller has left** instead of half of
-     `resolve-timeout`. For a play that is the same 5 s as before; for a search it is 2.5 s, so
-     half the budget is left for the search itself.
+     `resolve-timeout`. For a play that starts with discovery that is the same 5 s as before; for
+     a search it is 2.5 s, so half the budget is left for the search itself. One case changes for
+     plays: discovery that runs when part of the play's budget is already spent (after every
+     server failed) used to get `min(remaining, 5 s)` and now gets half of what is left, so that
+     something always remains for the request it serves.
 - **Rationale**: as written for RADIO-001, an expired list was rediscovered inside the request for
   up to 5 s, the whole search budget, once an hour, on a network whose DNS is slow. The refresh is
   still started only by a request, so it is not a scheduled refresh (constitution IX). A DNS
@@ -160,7 +167,7 @@ feature; "RADIO-001 R<n>" points at `specs/001-play-station-by-uuid/research.md`
 
   | Value | Rule |
   |---|---|
-  | station `name` | `StationTitle` rules: control characters removed, whitespace collapsed, 256 code points; nothing left gives an empty name (the station is still returned) |
+  | station `name` | `StationTitle` rules: control characters removed, whitespace collapsed, 256 code points; nothing left gives null (the station is still returned) |
   | `tags`, `languages` | split on `,`, trimmed, control characters removed, blanks and repeats dropped; an entry longer than 64 code points is **dropped, not cut** (a cut tag matches nothing when used as a filter); at most 30 tags and 10 languages, in the catalogue's order |
   | `favicon`, `homepage` | kept only if at most 2048 characters, parseable, scheme `http` or `https`, with a host; otherwise null. Never fetched |
   | `countryCode` | two ASCII letters, upper-cased; otherwise null |
@@ -208,8 +215,14 @@ feature; "RADIO-001 R<n>" points at `specs/001-play-station-by-uuid/research.md`
 ## R13. Version and build gates
 
 - **Decision**: the extension becomes 0.2.0 (a new feature; `Require-API-Version` stays
-  `[0.1.33,0.2.0)`, no newer hub API is used). The JaCoCo 90% line gate is extended to the `rest`
-  package, which holds the mapping from catalogue JSON to the API's shapes (constitution III).
+  `[0.1.33,0.2.0)`, no newer hub API is used). The JaCoCo 90% line gate is extended to `rest` and
+  its sub-packages (`multiroom.radio.rest*`: the mapping from catalogue JSON to the API's shapes,
+  the parsers, the error handling; constitution III) and to `text`, whose classes were under the
+  gate while they lived in `resolve`. Phases after the foundations run the real gate at every
+  checkpoint, so a coverage gap shows where it is made.
+- **The API description is written test-first too**: the handlers first carry only what Spring
+  MVC needs; the OpenAPI annotations and schema names are added in one step, after the test that
+  describes them has been seen to fail.
 - **Tests**: `@WebMvcTest` slices for the controllers with the advice and a mocked
   `RadioCatalogueService`; WireMock for the new catalogue calls with hand-written fixtures shaped
   like the live answers; `ApplicationContextRunner` for the wiring, including "no web application,

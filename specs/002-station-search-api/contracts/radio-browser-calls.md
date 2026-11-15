@@ -79,8 +79,8 @@ what is left, whichever is smallest, then cancelled and counted as `timeout`.
 ## Server discovery (changed for plays too)
 
 - A server list older than `server-list-ttl` is used as it is; one background refresh (DNS, then
-  `/json/servers`) is started and replaces the list when it succeeds. After a failed refresh none
-  is started for 60 s.
+  `/json/servers`) is started and replaces the list when it succeeds. It is given up after half of
+  `resolve-timeout`. After a failed refresh none is started for 60 s.
 - With no list, or after every server of the list failed, discovery runs inside the request and
   may use at most half of the time the caller has left.
 

@@ -18,7 +18,8 @@ mvn verify > "$TEMP/radio-verify.log" 2>&1; echo "exit $?"
 ```
 
 Expected: `exit 0`; JaCoCo line coverage at least 80% for the module and 90% for `resolve`,
-`catalogue`, `catalogue.servers` and `rest`; RADIO-001's tests still pass. The suite covers, with
+`catalogue`, `catalogue.servers`, `text`, `rest` and each `rest` sub-package; RADIO-001's tests
+still pass. The suite covers, with
 `@WebMvcTest`, WireMock and an injected DNS resolver:
 
 - every parameter rule: each invalid value, an unknown parameter and a repeated one answer 400
@@ -48,8 +49,11 @@ Inspect the JAR as in RADIO-001's quickstart; expected `Extension-Version: 0.2.0
 
 ## Part 2: live, once, on `multiroom.lan`
 
-Every request below is a read-only `GET` and makes no sound. The deploy and the restart each need
-the owner's permission, and the restart stops whatever is playing. `H=http://multiroom.lan:8080`.
+Every request in steps 2–7 is a read-only `GET` and makes no sound; step 8 is audible and needs
+its own permission. The deploy and the restart each need the owner's permission, and the restart
+stops whatever is playing. `H=http://multiroom.lan:8080`. Add
+`-w '\n%{time_total}s\n'` to the `curl` of steps 2–4 and record the times: with the first server
+answering, each is expected under 2 s, and a remembered list near 0.
 
 1. **Deploy and restart** (permission): `mvn deploy`, then
    `ssh -o BatchMode=yes tiger@multiroom.lan 'sudo -n systemctl restart multiroom.service'`; wait
@@ -77,10 +81,18 @@ the owner's permission, and the restart stops whatever is playing. `H=http://mul
    `RadioTagPage`, `RadioProblem`.
 7. **Nothing else changed**: `curl -s $H/api/v2/outputs` answers as before;
    `/actuator/metrics/radio.resolutions` did not move (no play was reported).
+8. **One play** (audible; permission; constitution VII, because this feature changes the play
+   path). Skip it only if RADIO-001's live verification ran on this build, and record which.
+   Follow the parent `AGENTS.md` and RADIO-001's quickstart part 2, steps 3 and 9: record the
+   `office` volume, mute and enabled flag and the master mute, keep the volume low, then
+   `curl -s -X POST $H/api/v2/play -H 'Content-Type: application/json' -d '{"uri":"<uri from step 2>","targetId":"office","targetType":"SINGLE_OUTPUT"}'`
+   with a known-good station (KissFM). It plays; stop that route first, restore what was
+   recorded, and confirm no ALSA playback device is open and
+   `/actuator/metrics/audio.output.routes?tag=output:office` reads 0.
 
 Acceptance steps 6 and 7 (upstream facts, codec labels) are already recorded in
-`verification.md`. The play itself is RADIO-001's live verification; if it runs in the same
-session, use a `uri` from step 2.
+`verification.md`. The full play acceptance stays RADIO-001's live verification; if it runs in the
+same session, use a `uri` from step 2 and step 8 is covered by it.
 
 Not live: "every server unreachable answers 503 within the budget while the hub keeps answering"
 is proved in part 1.
