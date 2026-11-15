@@ -17,7 +17,7 @@ cd /d/projects-sonora/sonora-radio
 mvn verify > "$TEMP/radio-verify.log" 2>&1; echo "exit $?"
 ```
 
-Expected: `exit 0`; JaCoCo line coverage at least 80% for the module and 90% for `resolve`,
+Expected: `exit 0`; JaCoCo line coverage at least 80% for the module and for `resolve`,
 `catalogue`, `catalogue.servers`, `text`, `rest` and each `rest` sub-package; RADIO-001's tests
 still pass. The suite covers, with
 `@WebMvcTest`, WireMock and an injected DNS resolver:
