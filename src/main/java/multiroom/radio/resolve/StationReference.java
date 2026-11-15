@@ -1,8 +1,8 @@
 package multiroom.radio.resolve;
 
-import java.util.Locale;
+import multiroom.radio.catalogue.StationUuid;
+
 import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
  * The parsed form of a {@code radiobrowser://<uuid>} URI. The label after {@code #} is kept for
@@ -14,8 +14,6 @@ import java.util.regex.Pattern;
 public record StationReference(UUID uuid, String label) {
 
     private static final String PREFIX = "radiobrowser://";
-    private static final Pattern UUID_FORM =
-            Pattern.compile("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
 
     @Override
     public boolean equals(Object other) {
@@ -55,9 +53,8 @@ public record StationReference(UUID uuid, String label) {
         if (authority.isEmpty()) {
             throw new IllegalArgumentException("the station UUID is missing");
         }
-        if (!UUID_FORM.matcher(authority).matches()) {
-            throw new IllegalArgumentException("not a station UUID");
-        }
-        return new StationReference(UUID.fromString(authority.toLowerCase(Locale.ROOT)), label);
+        UUID uuid = StationUuid.parse(authority)
+                .orElseThrow(() -> new IllegalArgumentException("not a station UUID"));
+        return new StationReference(uuid, label);
     }
 }

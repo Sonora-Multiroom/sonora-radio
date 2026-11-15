@@ -1,5 +1,6 @@
 package multiroom.radio.resolve;
 
+import multiroom.radio.text.Text;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.Locale;

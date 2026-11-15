@@ -241,6 +241,8 @@ class DiscoveredServerSourceTest {
         assertThat(metrics.discoveries).contains(List.of("server_list", "timeout"));
     }
 
+    // RADIO-002: an expired list is no longer rediscovered inside the request; it is returned at once
+    // and replaced by a background refresh, so this checks the refresh is not queued behind the stuck lookup.
     @Test
     void aTimedOutDnsLookupFallsBackToTheServerListAndIsNotQueuedBehindTheNext() throws Exception {
         wire.stubFor(get(urlEqualTo("/json/servers")).willReturn(aResponse().withBody(Fixtures.load("servers.json"))));
@@ -260,8 +262,11 @@ class DiscoveredServerSourceTest {
         DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
         assertThat(hosts(source.servers(deadline()))).hasSize(2);
 
-        // expire the list; the second discovery's lookup completes although the first is still stuck
+        // expire the list: the old one is returned at once, and the refresh's lookup completes
+        // although the first is still stuck
         clock.advance(Duration.ofHours(2));
+        assertThat(hosts(source.servers(deadline()))).hasSize(2);
+        waitUntil(() -> hosts(source.servers(deadline())).size() == 3);
         assertThat(hosts(source.servers(deadline()))).containsExactlyInAnyOrderElementsOf(EXPECTED_NAMES);
         never.countDown();
     }
@@ -317,17 +322,18 @@ class DiscoveredServerSourceTest {
         DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
         source.servers(deadline());              // first lookup stuck: list comes from /json/servers
         clock.advance(Duration.ofHours(2));
-        List<String> second = hosts(source.servers(deadline()));   // second lookup answers at once: de1
-        assertThat(second).containsExactly("de1.api.radio-browser.info");
+        source.servers(deadline());              // RADIO-002: the old list at once, a refresh starts
+        waitUntil(() -> hosts(source.servers(deadline())).equals(List.of("de1.api.radio-browser.info")));
 
         release.countDown();                      // the first lookup answers late with nl1
         Thread.sleep(300);
         assertThat(hosts(source.servers(deadline()))).containsExactly("de1.api.radio-browser.info");
     }
 
+    // RADIO-002: discovery inside a request now gets half of what the caller has left (it was half of
+    // resolve-timeout); resolve-timeout's half bounds the background refresh instead.
     @Test
-    void discoveryStopsAtHalfOfTheResolveTimeoutEvenWithMoreTimeLeft() {
-        properties.setResolveTimeout(Duration.ofSeconds(1));
+    void discoveryInsideARequestStopsAtHalfOfWhatTheCallerHasLeft() {
         properties.setDiscoveryTimeout(Duration.ofSeconds(3));
         properties.setReadTimeout(Duration.ofSeconds(3));
         wire.stubFor(get(urlEqualTo("/json/servers")).willReturn(aResponse().withFixedDelay(2000).withBody("[]")));
@@ -339,16 +345,26 @@ class DiscoveredServerSourceTest {
                 return List.of();
             }
         };
+        Deadline twoSeconds = Deadline.after(Clock.systemUTC(), Duration.ofSeconds(2));
         long start = System.nanoTime();
-        assertThatThrownBy(() -> source(dns).servers(deadline())).isInstanceOf(CatalogueUnavailableException.class);
-        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(1100));
+        assertThatThrownBy(() -> source(dns).servers(twoSeconds)).isInstanceOf(CatalogueUnavailableException.class);
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - start);
+        assertThat(elapsed).isGreaterThanOrEqualTo(Duration.ofMillis(900)).isLessThan(Duration.ofMillis(1400));
         never.countDown();
+    }
+
+    @Test
+    void theShareIsHalfOfWhatTheCallerHasLeft() {
+        assertThat(DiscoveredServerSource.shareOf(Duration.ofSeconds(5))).isEqualTo(Duration.ofMillis(2500));
+        assertThat(DiscoveredServerSource.shareOf(Duration.ofSeconds(10))).isEqualTo(Duration.ofSeconds(5));
+        assertThat(DiscoveredServerSource.shareOf(Duration.ofSeconds(4))).isEqualTo(Duration.ofSeconds(2));
+        assertThat(DiscoveredServerSource.shareOf(Duration.ZERO)).isEqualTo(Duration.ZERO);
     }
 
     // ---- TTL, rotation, concurrency -------------------------------------------------------------
 
     @Test
-    void theListIsDiscoveredAgainAfterTheTtl() {
+    void theListIsRefreshedInTheBackgroundAfterTheTtl() throws Exception {
         FakeDns dns = new FakeDns();
         MutableClock clock = new MutableClock();
         DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
@@ -358,7 +374,8 @@ class DiscoveredServerSourceTest {
         assertThat(dns.lookups).hasValue(1);
         clock.advance(Duration.ofMinutes(2));
         source.servers(deadline());
-        assertThat(dns.lookups).hasValue(2);
+        waitUntil(() -> dns.lookups.get() == 2);
+        waitUntil(() -> !source.refreshInProgress());
     }
 
     @Test
@@ -424,5 +441,146 @@ class DiscoveredServerSourceTest {
         };
         assertThat(source(broken).servers(deadline())).hasSize(2);
         assertThat(metrics.discoveries).containsExactly(List.of("dns", "error"), List.of("server_list", "ok"));
+    }
+
+    // ---- expired list: used at once, refreshed in the background (RADIO-002) --------------------
+
+    private static final class ControlledDns extends FakeDns {
+        volatile CountDownLatch gate = new CountDownLatch(0);
+        volatile boolean empty;
+        final AtomicInteger entered = new AtomicInteger();
+
+        @Override
+        public List<InetAddress> lookup(String host) {
+            entered.incrementAndGet();
+            await(gate);
+            List<InetAddress> found = super.lookup(host);
+            return empty ? List.of() : found;
+        }
+    }
+
+    @Test
+    void anExpiredListIsReturnedAtOnceAndOneBackgroundRefreshReplacesIt() throws Exception {
+        ControlledDns dns = new ControlledDns();
+        MutableClock clock = new MutableClock();
+        DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
+        List<String> first = hosts(source.servers(deadline()));
+        clock.advance(Duration.ofHours(2));
+        dns.gate = new CountDownLatch(1);
+
+        long start = System.nanoTime();
+        List<String> during = hosts(source.servers(deadline()));
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(200));
+        assertThat(during).isEqualTo(first);
+
+        dns.gate.countDown();
+        waitUntil(() -> !source.refreshInProgress());
+        assertThat(dns.lookups).hasValue(2);
+        assertThat(hosts(source.servers(deadline()))).containsExactlyInAnyOrderElementsOf(EXPECTED_NAMES);
+    }
+
+    @Test
+    void twoRequestsDuringOneRefreshStartOnlyOne() throws Exception {
+        ControlledDns dns = new ControlledDns();
+        MutableClock clock = new MutableClock();
+        DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
+        source.servers(deadline());
+        clock.advance(Duration.ofHours(2));
+        dns.gate = new CountDownLatch(1);
+
+        source.servers(deadline());
+        source.servers(deadline());
+        source.servers(deadline());
+        waitUntil(() -> dns.entered.get() == 2);
+        Thread.sleep(100);
+        assertThat(dns.entered).hasValue(2);
+        dns.gate.countDown();
+        waitUntil(() -> !source.refreshInProgress());
+        assertThat(dns.entered).hasValue(2);
+    }
+
+    @Test
+    void aFailedRefreshKeepsTheOldListAndNoneStartsForSixtySecondsThenOneDoes() throws Exception {
+        wire.stubFor(get(urlEqualTo("/json/servers")).willReturn(aResponse().withStatus(500)));
+        ControlledDns dns = new ControlledDns();
+        MutableClock clock = new MutableClock();
+        DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
+        List<String> first = hosts(source.servers(deadline()));
+        clock.advance(Duration.ofHours(2));
+        dns.empty = true;
+
+        source.servers(deadline());
+        waitUntil(() -> dns.lookups.get() == 2);
+        waitUntil(() -> !source.refreshInProgress());
+        assertThat(hosts(source.servers(deadline()))).isEqualTo(first);     // the old list stays
+
+        clock.advance(Duration.ofSeconds(59));
+        source.servers(deadline());
+        Thread.sleep(100);
+        assertThat(dns.lookups).hasValue(2);                                // still paused
+
+        clock.advance(Duration.ofSeconds(2));
+        dns.empty = false;
+        source.servers(deadline());
+        waitUntil(() -> dns.lookups.get() == 3);
+        waitUntil(() -> !source.refreshInProgress());
+        assertThat(hosts(source.servers(deadline()))).containsExactlyInAnyOrderElementsOf(EXPECTED_NAMES);
+    }
+
+    @Test
+    void aRefreshIsGivenUpAfterHalfOfTheResolveTimeout() throws Exception {
+        properties.setResolveTimeout(Duration.ofMillis(600));
+        properties.setDiscoveryTimeout(Duration.ofSeconds(5));
+        ControlledDns dns = new ControlledDns();
+        MutableClock clock = new MutableClock();
+        DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + Wire.closedPort()));
+        source.servers(deadline());
+        clock.advance(Duration.ofHours(2));
+        dns.gate = new CountDownLatch(1);
+
+        long start = System.nanoTime();
+        source.servers(deadline());
+        waitUntil(() -> source.refreshInProgress());
+        waitUntil(() -> !source.refreshInProgress());
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofMillis(1500));
+        dns.gate.countDown();
+    }
+
+    @Test
+    void withNoListDiscoveryRunsInsideTheRequestAndAFullyFailedListToo() {
+        FakeDns dns = new FakeDns();
+        DiscoveredServerSource source = source(dns);
+        assertThat(source.servers(deadline())).hasSize(3);          // no list: inside the request
+        source.allFailed();
+        assertThat(source.servers(deadline())).hasSize(3);          // all failed: inside the request again
+        assertThat(dns.lookups).hasValue(2);
+    }
+
+    @Test
+    void aBackgroundRefreshCountsAsADiscoveryAndLogsAtInfoWithSourceAndCount() throws Exception {
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(DiscoveredServerSource.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            FakeDns dns = new FakeDns();
+            MutableClock clock = new MutableClock();
+            DiscoveredServerSource source = source(dns, clock, URI.create("http://localhost:" + wire.port()));
+            source.servers(deadline());
+            appender.list.clear();
+            metrics.discoveries.clear();
+            clock.advance(Duration.ofHours(2));
+            source.servers(deadline());
+            waitUntil(() -> !source.refreshInProgress() && dns.lookups.get() == 2);
+            assertThat(metrics.discoveries).containsExactly(List.of("dns", "ok"));
+            assertThat(appender.list).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(ch.qos.logback.classic.Level.INFO);
+                assertThat(event.getFormattedMessage()).contains("3").contains("dns");
+            });
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 }

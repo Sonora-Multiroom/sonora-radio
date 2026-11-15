@@ -41,6 +41,39 @@ class CachingRadioBrowserClientTest {
         }
 
         @Override
+        public CatalogueAnswer<StationPage> search(StationQuery query, Deadline deadline) {
+            calls.add("search");
+            return CatalogueAnswer.from(new StationPage(List.of(), 0), "srv");
+        }
+
+        @Override
+        public CatalogueAnswer<List<Country>> countries(Deadline deadline) {
+            calls.add("countries");
+            if (failure != null) {
+                throw failure;
+            }
+            return CatalogueAnswer.from(List.of(new Country("UA", "Ukraine", 1)), "srv");
+        }
+
+        @Override
+        public CatalogueAnswer<List<Language>> languages(Deadline deadline) {
+            calls.add("languages");
+            if (failure != null) {
+                throw failure;
+            }
+            return CatalogueAnswer.from(List.of(new Language("english", "en", 1)), "srv");
+        }
+
+        @Override
+        public CatalogueAnswer<TagPage> tags(TagQuery query, Deadline deadline) {
+            calls.add("tags:" + query.name() + ":" + query.limit() + ":" + query.offset());
+            if (failure != null) {
+                throw failure;
+            }
+            return CatalogueAnswer.from(new TagPage(List.of(new TagCount("jazz", 1)), 1), "srv");
+        }
+
+        @Override
         public CatalogueAnswer<PlayReport> reportPlay(UUID uuid, Deadline deadline) {
             calls.add("play");
             return CatalogueAnswer.from(new PlayReport(true, "http://x.test/"), "srv");
@@ -54,7 +87,7 @@ class CachingRadioBrowserClientTest {
     private final UUID id = UUID.randomUUID();
 
     private static Station station(UUID uuid, String name) {
-        return new Station(uuid, name, "http://s.test/" + name, "MP3", false);
+        return multiroom.radio.support.Fixtures.station(uuid, name, "http://s.test/" + name, "MP3", false);
     }
 
     @BeforeEach
@@ -140,5 +173,78 @@ class CachingRadioBrowserClientTest {
         client.reportPlay(id, DEADLINE);
         client.reportPlay(id, DEADLINE);
         assertThat(delegate.calls).containsExactly("station", "play", "play");
+    }
+
+    @Test
+    void searchIsNeverCached() {
+        StationQuery query = new StationQuery(null, null, null, null, null, null, StationOrder.VOTES,
+                SortDirection.DESC, 20, 0);
+        client.search(query, DEADLINE);
+        client.search(query, DEADLINE);
+        assertThat(delegate.calls).containsExactly("search", "search");
+    }
+
+    // ---- remembered lists (RADIO-002) ----------------------------------------------------------
+
+    @Test
+    void aSecondCountriesCallWithinSixHoursMakesNoCatalogueRequestAndAskingAgainAfterThemDoes() {
+        CatalogueAnswer<List<Country>> first = client.countries(DEADLINE);
+        assertThat(first.serverTag()).contains("srv");
+        clock.advance(Duration.ofHours(5).plusMinutes(59));
+        CatalogueAnswer<List<Country>> second = client.countries(DEADLINE);
+        assertThat(second.serverTag()).isEmpty();
+        assertThat(second.value()).isEqualTo(first.value());
+        assertThat(delegate.calls).containsExactly("countries");
+        clock.advance(Duration.ofMinutes(2));
+        client.countries(DEADLINE);
+        assertThat(delegate.calls).containsExactly("countries", "countries");
+    }
+
+    @Test
+    void languagesAreRememberedForSixHoursToo() {
+        client.languages(DEADLINE);
+        client.languages(DEADLINE);
+        assertThat(delegate.calls).containsExactly("languages");
+        clock.advance(Duration.ofHours(6).plusSeconds(1));
+        client.languages(DEADLINE);
+        assertThat(delegate.calls).containsExactly("languages", "languages");
+    }
+
+    @Test
+    void tagPagesAreKeyedByNameLimitAndOffset() {
+        client.tags(new TagQuery("jazz", 20, 0), DEADLINE);
+        client.tags(new TagQuery("jazz", 20, 0), DEADLINE);
+        assertThat(delegate.calls).containsExactly("tags:jazz:20:0");
+        client.tags(new TagQuery("jazz", 50, 0), DEADLINE);
+        client.tags(new TagQuery("jazz", 20, 20), DEADLINE);
+        client.tags(new TagQuery(null, 20, 0), DEADLINE);
+        assertThat(delegate.calls).hasSize(4);
+    }
+
+    @Test
+    void atMostTwoHundredTagPagesAreKeptOldestDroppedFirst() {
+        for (int offset = 0; offset < 201; offset++) {
+            client.tags(new TagQuery(null, 1, offset), DEADLINE);
+        }
+        delegate.calls.clear();
+        client.tags(new TagQuery(null, 1, 200), DEADLINE);   // newest: still there
+        client.tags(new TagQuery(null, 1, 1), DEADLINE);     // second oldest: still there
+        assertThat(delegate.calls).isEmpty();
+        client.tags(new TagQuery(null, 1, 0), DEADLINE);     // oldest: dropped
+        assertThat(delegate.calls).containsExactly("tags:null:1:0");
+    }
+
+    @Test
+    void anExceptionStoresNothingAndTheNextCallAsksAgain() {
+        delegate.failure = new CatalogueUnavailableException("down", List.of());
+        assertThatThrownBy(() -> client.countries(DEADLINE)).isInstanceOf(CatalogueUnavailableException.class);
+        assertThatThrownBy(() -> client.languages(DEADLINE)).isInstanceOf(CatalogueUnavailableException.class);
+        assertThatThrownBy(() -> client.tags(new TagQuery(null, 1, 0), DEADLINE))
+                .isInstanceOf(CatalogueUnavailableException.class);
+        delegate.failure = null;
+        client.countries(DEADLINE);
+        client.languages(DEADLINE);
+        client.tags(new TagQuery(null, 1, 0), DEADLINE);
+        assertThat(delegate.calls).hasSize(6);
     }
 }

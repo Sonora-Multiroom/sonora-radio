@@ -1,0 +1,23 @@
+[
+  {
+    "changeuuid": "11111111-1111-1111-1111-111111111111",
+    "stationuuid": "9617a958-0601-11e8-ae97-52543be04c81",
+    "name": "Many Tags",
+    "url": "https://s.example.test/ManyTags.pls",
+    "url_resolved": "https://s.example.test/ManyTags.mp3",
+    "homepage": "https://manytags.example.test/",
+    "favicon": "https://manytags.example.test/i.png",
+    "tags": "tag00,tag01,tag02,tag03,tag04,tag05,tag06,tag07,tag08,tag09,tag10,tag11,tag12,tag13,tag14,tag15,tag16,tag17,tag18,tag19,tag20,tag21,tag22,tag23,tag24,tag25,tag26,tag27,tag28,tag29,tag30,tag31,tag32,tag33,tag34,tag35,tag36,tag37,tag38,tag39,tag40,tag41,tag42,tag43,tag44,tag45,tag46,tag47,tag48,tag49,tag50,tag51,tag52,tag53,tag54,tag55,tag56,tag57",
+    "country": "Ukraine",
+    "countrycode": "UA",
+    "language": "ukrainian,russian",
+    "languagecodes": "uk,ru",
+    "votes": 42,
+    "codec": "MP3",
+    "bitrate": 128,
+    "hls": 0,
+    "lastcheckok": 1,
+    "clickcount": 7,
+    "lastcheckoktime": "2026-11-15 10:00:00"
+  }
+]

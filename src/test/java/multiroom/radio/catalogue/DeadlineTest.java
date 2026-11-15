@@ -64,4 +64,37 @@ class DeadlineTest {
         clock.advance(Duration.ofSeconds(4));
         assertThat(deadline.cap(Duration.ofSeconds(2))).isEqualTo(Duration.ofSeconds(1));
     }
+
+    @Test
+    void aDeadlineMadeWithoutAnAttemptLimitHasNone() {
+        Deadline deadline = Deadline.after(new MutableClock(), Duration.ofSeconds(5));
+        assertThat(deadline.attemptLimit()).isNull();
+        assertThat(deadline.attemptCap(Duration.ofSeconds(6))).isEqualTo(Duration.ofSeconds(5));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(2))).isEqualTo(Duration.ofSeconds(2));
+    }
+
+    @Test
+    void aDeadlineMadeWithAnAttemptLimitReportsIt() {
+        Deadline deadline = Deadline.after(new MutableClock(), Duration.ofSeconds(5), Duration.ofMillis(2500));
+        assertThat(deadline.attemptLimit()).isEqualTo(Duration.ofMillis(2500));
+    }
+
+    @Test
+    void attemptCapIsTheSmallestOfTheConfiguredLimitTheAttemptLimitAndWhatIsLeft() {
+        MutableClock clock = new MutableClock();
+        Deadline deadline = Deadline.after(clock, Duration.ofSeconds(5), Duration.ofSeconds(2));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(6))).isEqualTo(Duration.ofSeconds(2));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(1))).isEqualTo(Duration.ofSeconds(1));
+        clock.advance(Duration.ofMillis(4500));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(6))).isEqualTo(Duration.ofMillis(500));
+    }
+
+    @Test
+    void theAttemptLimitNeverExceedsTheDeadline() {
+        MutableClock clock = new MutableClock();
+        Deadline deadline = Deadline.after(clock, Duration.ofSeconds(1), Duration.ofSeconds(30));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(60))).isEqualTo(Duration.ofSeconds(1));
+        clock.advance(Duration.ofSeconds(2));
+        assertThat(deadline.attemptCap(Duration.ofSeconds(60))).isEqualTo(Duration.ZERO);
+    }
 }

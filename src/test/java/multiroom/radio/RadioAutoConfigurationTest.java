@@ -14,10 +14,15 @@ import multiroom.radio.metrics.MicrometerRadioMetrics;
 import multiroom.radio.metrics.NoopRadioMetrics;
 import multiroom.radio.metrics.RadioMetrics;
 import multiroom.radio.resolve.RadioStationResolver;
+import multiroom.radio.rest.RadioCatalogueService;
+import multiroom.radio.rest.RadioStationMapper;
+import multiroom.radio.rest.controller.RadioBrowseController;
+import multiroom.radio.rest.controller.RadioStationsController;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.FilteredClassLoader;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.boot.test.context.runner.WebApplicationContextRunner;
 
 import java.net.InetAddress;
 import java.util.List;
@@ -166,6 +171,117 @@ class RadioAutoConfigurationTest {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(RadioMetrics.class)).isInstanceOf(NoopRadioMetrics.class);
             assertThat(context.getBean(RadioStationResolver.class)).isNotNull();
+        });
+    }
+
+    // ---- the REST layer (RADIO-002) --------------------------------------------------------------
+
+    private final WebApplicationContextRunner webRunner = new WebApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(RadioAutoConfiguration.class));
+
+    @Test
+    void inAServletWebApplicationTheStationsControllerServiceAndMapperExist() {
+        webRunner.run(context -> {
+            assertThat(context).hasSingleBean(RadioStationsController.class);
+            assertThat(context).hasSingleBean(RadioCatalogueService.class);
+            assertThat(context).hasSingleBean(RadioStationMapper.class);
+        });
+    }
+
+    @Test
+    void disabledContributesNoRestBeans() {
+        webRunner.withPropertyValues("multiroom.radio.enabled=false").run(context -> {
+            assertThat(context).doesNotHaveBean(RadioStationsController.class);
+            assertThat(context).doesNotHaveBean(RadioCatalogueService.class);
+            assertThat(context).doesNotHaveBean(RadioStationMapper.class);
+        });
+    }
+
+    @Test
+    void inANonWebContextThereIsNoControllerButTheResolverStillExists() {
+        runner.run(context -> {
+            assertThat(context).doesNotHaveBean(RadioStationsController.class);
+            assertThat(context).doesNotHaveBean(RadioCatalogueService.class);
+            assertThat(context).hasSingleBean(RadioStationResolver.class);
+        });
+    }
+
+    @Test
+    void theBrowseControllerExistsOnlyWhereTheStationsControllerDoes() {
+        webRunner.run(context -> {
+            assertThat(context).hasSingleBean(RadioStationsController.class);
+            assertThat(context).hasSingleBean(RadioBrowseController.class);
+        });
+        runner.run(context -> assertThat(context).doesNotHaveBean(RadioBrowseController.class));
+        webRunner.withPropertyValues("multiroom.radio.enabled=false")
+                .run(context -> assertThat(context).doesNotHaveBean(RadioBrowseController.class));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"0", "-1s", "0s"})
+    void aRequestTimeoutThatIsNotPositiveFailsStartUpNamingTheSetting(String value) {
+        webRunner.withPropertyValues("multiroom.radio.request-timeout=" + value).run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(flatten(context.getStartupFailure())).contains("multiroom.radio.request-timeout");
+        });
+    }
+
+    @Test
+    void anUnparseableRequestTimeoutFailsStartUpNamingTheSetting() {
+        webRunner.withPropertyValues("multiroom.radio.request-timeout=abc").run(context -> {
+            assertThat(context).hasFailed();
+            assertThat(flatten(context.getStartupFailure())).contains("request-timeout");
+        });
+    }
+
+    @Test
+    void startingAWebContextMakesNoCatalogueRequestAndNoDnsLookup() {
+        WireMockServer wire = new WireMockServer(options().dynamicPort());
+        wire.start();
+        AtomicInteger lookups = new AtomicInteger();
+        DnsResolver counting = new DnsResolver() {
+            @Override
+            public List<InetAddress> lookup(String host) {
+                lookups.incrementAndGet();
+                return List.of();
+            }
+
+            @Override
+            public Optional<String> reverse(InetAddress address) {
+                lookups.incrementAndGet();
+                return Optional.empty();
+            }
+        };
+        try {
+            webRunner.withBean(DnsResolver.class, () -> counting).run(context -> {
+                assertThat(context).hasNotFailed();
+                assertThat(context).hasSingleBean(RadioStationsController.class);
+            });
+            webRunner.withPropertyValues("multiroom.radio.servers[0]=http://localhost:" + wire.port())
+                    .run(context -> assertThat(context).hasNotFailed());
+            assertThat(lookups).hasValue(0);
+            assertThat(wire.getAllServeEvents()).isEmpty();
+        } finally {
+            wire.stop();
+        }
+    }
+
+    @Test
+    void disabledContributesNoControllerServiceAdviceOrFallback() {
+        webRunner.withPropertyValues("multiroom.radio.enabled=false").run(context -> {
+            assertThat(context).doesNotHaveBean(RadioStationsController.class);
+            assertThat(context).doesNotHaveBean(RadioBrowseController.class);
+            assertThat(context).doesNotHaveBean(RadioCatalogueService.class);
+            assertThat(context).doesNotHaveBean(multiroom.radio.rest.advice.RadioExceptionHandler.class);
+            assertThat(context).doesNotHaveBean(multiroom.radio.rest.controller.RadioFallbackController.class);
+        });
+    }
+
+    @Test
+    void anEnabledWebContextHasTheAdviceAndTheFallback() {
+        webRunner.run(context -> {
+            assertThat(context).hasSingleBean(multiroom.radio.rest.advice.RadioExceptionHandler.class);
+            assertThat(context).hasSingleBean(multiroom.radio.rest.controller.RadioFallbackController.class);
         });
     }
 }

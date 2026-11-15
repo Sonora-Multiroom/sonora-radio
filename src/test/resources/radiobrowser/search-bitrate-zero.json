@@ -1,0 +1,23 @@
+[
+  {
+    "changeuuid": "11111111-1111-1111-1111-111111111111",
+    "stationuuid": "9617a958-0601-11e8-ae97-52543be04c81",
+    "name": "Unknown Rate",
+    "url": "https://s.example.test/UnknownRate.pls",
+    "url_resolved": "https://s.example.test/UnknownRate.mp3",
+    "homepage": "https://unknownrate.example.test/",
+    "favicon": "https://unknownrate.example.test/i.png",
+    "tags": "jazz,smooth jazz",
+    "country": "Ukraine",
+    "countrycode": "UA",
+    "language": "ukrainian,russian",
+    "languagecodes": "uk,ru",
+    "votes": 42,
+    "codec": "MP3",
+    "bitrate": 0,
+    "hls": 0,
+    "lastcheckok": 0,
+    "clickcount": 7,
+    "lastcheckoktime": "2026-11-15 10:00:00"
+  }
+]

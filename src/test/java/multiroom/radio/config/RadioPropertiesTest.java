@@ -53,6 +53,7 @@ class RadioPropertiesTest {
         assertThat(p.getStationCacheTtl()).isEqualTo(Duration.ofMinutes(5));
         assertThat(p.getStationCacheSize()).isEqualTo(100);
         assertThat(p.isAllowHls()).isTrue();
+        assertThat(p.getRequestTimeout()).isEqualTo(Duration.ofSeconds(5));
     }
 
     @Test
@@ -111,5 +112,16 @@ class RadioPropertiesTest {
         assertRejected("user-agent", "user-agent", "a\r\nb");
         assertRejected("user-agent", "user-agent", "x".repeat(201));
         assertThat(messages(bind("user-agent", "x".repeat(200)))).isEmpty();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"0", "-1s", "abc"})
+    void requestTimeoutMustBePositiveAndNamedInTheMessage(String value) {
+        // "abc" cannot be bound at all; the binder's failure names the property too.
+        try {
+            assertRejected("request-timeout", "request-timeout", value);
+        } catch (org.springframework.boot.context.properties.bind.BindException e) {
+            assertThat(e.getMessage()).contains("multiroom.radio.request-timeout");
+        }
     }
 }

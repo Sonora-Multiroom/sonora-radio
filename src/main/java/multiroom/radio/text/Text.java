@@ -1,13 +1,13 @@
-package multiroom.radio.resolve;
+package multiroom.radio.text;
 
 /** Bounding helpers for untrusted catalogue text. */
-final class Text {
+public final class Text {
 
     private Text() {
     }
 
     /** Removes control characters and line and paragraph separators. */
-    static String withoutControl(String text) {
+    public static String withoutControl(String text) {
         StringBuilder out = new StringBuilder(text.length());
         text.codePoints()
                 .filter(cp -> !Character.isISOControl(cp) && cp != ' ' && cp != ' ')
@@ -16,7 +16,7 @@ final class Text {
     }
 
     /** Cuts at {@code maxCodePoints}, never inside a surrogate pair. */
-    static String truncate(String text, int maxCodePoints) {
+    public static String truncate(String text, int maxCodePoints) {
         if (text.codePointCount(0, text.length()) <= maxCodePoints) {
             return text;
         }
@@ -24,7 +24,7 @@ final class Text {
     }
 
     /** Safe to put in a message or a log line: no control characters, at most {@code maxCodePoints}. */
-    static String bounded(String text, int maxCodePoints) {
+    public static String bounded(String text, int maxCodePoints) {
         return truncate(withoutControl(text == null ? "" : text), maxCodePoints);
     }
 }

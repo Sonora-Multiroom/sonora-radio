@@ -1,0 +1,274 @@
+openapi: 3.0.3
+info:
+  title: Radio extension REST API (RADIO-002)
+  version: 0.2.0
+  description: >
+    Read-only requests that search and browse the radio-browser.info catalogue through the hub.
+    Served only when the radio extension is installed and enabled; otherwise every path answers
+    404, which clients read as "radio is not available". Unversioned, outside REST v2. Existing
+    parameters, fields and statuses do not change incompatibly; fields and optional parameters may
+    be added, so clients ignore fields they do not know. A parameter a request does not define, or
+    one sent twice, answers 400. To play a station, pass its `uri` to `POST /api/v2/play`.
+tags:
+  - name: Radio
+    description: Search and browse radio stations
+paths:
+  /api/radio/stations:
+    get:
+      tags: [Radio]
+      operationId: searchRadioStations
+      summary: Search stations
+      description: >
+        Returns stations matching every filter given, never ones the catalogue marks as broken.
+        With no parameters: the 20 most-voted stations. The order among stations with equal values
+        is not stable, so a client that pages drops stations whose `uuid` it has already received.
+      parameters:
+        - name: name
+          in: query
+          description: Part of the station name, any letter case. Blank counts as not given. `%` is refused.
+          schema: { type: string, maxLength: 100 }
+        - name: tag
+          in: query
+          description: One whole tag, any letter case ("jazz" does not match "acid jazz"). Find tags through `/api/radio/tags`.
+          schema: { type: string, maxLength: 100 }
+        - name: countryCode
+          in: query
+          description: ISO 3166-1 alpha-2, either case.
+          schema: { type: string, pattern: '^[A-Za-z]{2}$' }
+        - name: language
+          in: query
+          description: One whole language name as `/api/radio/languages` gives it, any letter case.
+          schema: { type: string, maxLength: 100 }
+        - name: codec
+          in: query
+          description: The catalogue's codec label, whole, any letter case (for example MP3, AAC+).
+          schema: { type: string, maxLength: 32 }
+        - name: bitrateMin
+          in: query
+          description: Lowest bitrate in kbit/s. Stations of unknown bitrate are excluded when it is above 0.
+          schema: { type: integer, minimum: 0, maximum: 1000000 }
+        - name: order
+          in: query
+          description: What to sort by.
+          schema: { type: string, enum: [name, votes, clickCount, bitrate], default: votes }
+        - name: direction
+          in: query
+          description: Defaults to `desc` for `votes` and `clickCount`, `asc` for `name` and `bitrate`.
+          schema: { type: string, enum: [asc, desc] }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: One page of stations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RadioStationPage' }
+        '400': { $ref: '#/components/responses/InvalidParameter' }
+        '502': { $ref: '#/components/responses/CatalogueBadAnswer' }
+        '503': { $ref: '#/components/responses/CatalogueUnavailable' }
+        default: { $ref: '#/components/responses/OtherError' }
+  /api/radio/stations/{uuid}:
+    get:
+      tags: [Radio]
+      operationId: getRadioStation
+      summary: One station by its UUID
+      description: Returned whether or not the catalogue marks it as broken (see `lastCheckOk`). May be up to 5 minutes old.
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          description: The station UUID, any letter case.
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The station
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RadioStation' }
+        '400': { $ref: '#/components/responses/InvalidParameter' }
+        '404':
+          description: A well-formed UUID the catalogue does not know (`station-not-found`); the detail names it
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/RadioProblem' }
+        '502': { $ref: '#/components/responses/CatalogueBadAnswer' }
+        '503': { $ref: '#/components/responses/CatalogueUnavailable' }
+        default: { $ref: '#/components/responses/OtherError' }
+  /api/radio/countries:
+    get:
+      tags: [Radio]
+      operationId: listRadioCountries
+      summary: Countries with their station counts
+      description: The whole list, largest first. Remembered by the hub for 6 hours. Counts exclude broken stations and are close to, not equal to, what a search returns.
+      responses:
+        '200':
+          description: Every country that has stations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RadioCountry' }
+        '400': { $ref: '#/components/responses/InvalidParameter' }
+        '502': { $ref: '#/components/responses/CatalogueBadAnswer' }
+        '503': { $ref: '#/components/responses/CatalogueUnavailable' }
+        default: { $ref: '#/components/responses/OtherError' }
+  /api/radio/languages:
+    get:
+      tags: [Radio]
+      operationId: listRadioLanguages
+      summary: Languages with their station counts
+      description: The whole list, largest first. Remembered by the hub for 6 hours.
+      responses:
+        '200':
+          description: Every language that has stations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RadioLanguage' }
+        '400': { $ref: '#/components/responses/InvalidParameter' }
+        '502': { $ref: '#/components/responses/CatalogueBadAnswer' }
+        '503': { $ref: '#/components/responses/CatalogueUnavailable' }
+        default: { $ref: '#/components/responses/OtherError' }
+  /api/radio/tags:
+    get:
+      tags: [Radio]
+      operationId: listRadioTags
+      summary: Tags with their station counts
+      description: Largest first. The full list has more than ten thousand entries, so it is paged; filter it with `name`. Each page is remembered by the hub for 6 hours.
+      parameters:
+        - name: name
+          in: query
+          description: Part of the tag name, any letter case. Blank counts as not given. `%` and `/` are refused.
+          schema: { type: string, maxLength: 100 }
+        - $ref: '#/components/parameters/limit'
+        - $ref: '#/components/parameters/offset'
+      responses:
+        '200':
+          description: One page of tags
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RadioTagPage' }
+        '400': { $ref: '#/components/responses/InvalidParameter' }
+        '502': { $ref: '#/components/responses/CatalogueBadAnswer' }
+        '503': { $ref: '#/components/responses/CatalogueUnavailable' }
+        default: { $ref: '#/components/responses/OtherError' }
+components:
+  parameters:
+    limit:
+      name: limit
+      in: query
+      description: Page size. A value outside the range is refused, never reduced.
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    offset:
+      name: offset
+      in: query
+      description: Where the page starts. Send the previous answer's `nextOffset`.
+      schema: { type: integer, minimum: 0, maximum: 10000, default: 0 }
+  responses:
+    InvalidParameter:
+      description: >
+        A malformed or out-of-range value, a parameter the request does not define, or one sent
+        twice (`invalid-parameter`). `parameter` names it. The catalogue was not contacted.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/RadioProblem' }
+    CatalogueBadAnswer:
+      description: The catalogue answered with something unreadable or refused the request (`catalogue-bad-answer`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/RadioProblem' }
+    CatalogueUnavailable:
+      description: No catalogue server answered within the time budget (`catalogue-unavailable`)
+      headers:
+        Retry-After:
+          description: Seconds to wait before trying again (30)
+          schema: { type: integer }
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/RadioProblem' }
+    OtherError:
+      description: >
+        405 for a method other than GET (`method-not-allowed`), 404 for an unknown path under
+        `/api/radio/` (`not-found`), 500 for an unexpected failure (`internal-error`)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/RadioProblem' }
+  schemas:
+    RadioStation:
+      type: object
+      required: [uuid, uri, languages, tags, hls, lastCheckOk, votes, clickCount]
+      properties:
+        uuid: { type: string, format: uuid, description: The station's stable identifier, lower case }
+        uri: { type: string, description: 'Pass unchanged to POST /api/v2/play', example: 'radiobrowser://9617a958-0601-11e8-ae97-52543be04c81' }
+        name: { type: string, nullable: true, maxLength: 256, description: Community-edited text }
+        favicon: { type: string, nullable: true, maxLength: 2048, description: An http or https address the hub has not fetched or checked }
+        homepage: { type: string, nullable: true, maxLength: 2048, description: An http or https address the hub has not fetched or checked }
+        countryCode: { type: string, nullable: true, description: ISO 3166-1 alpha-2, upper case }
+        languages:
+          type: array
+          maxItems: 10
+          items: { type: string, maxLength: 64 }
+        tags:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 64 }
+        codec: { type: string, nullable: true, maxLength: 32, description: 'The catalogue''s label, for example MP3, AAC+, OGG, UNKNOWN' }
+        bitrate: { type: integer, nullable: true, description: kbit/s; null when unknown }
+        hls: { type: boolean, description: An HLS stream; the hub may be configured to refuse these when played }
+        lastCheckOk: { type: boolean, description: Whether the catalogue's last check of the stream succeeded }
+        votes: { type: integer, minimum: 0 }
+        clickCount: { type: integer, minimum: 0, description: Plays reported in the last 24 hours }
+    RadioStationPage:
+      type: object
+      required: [stations]
+      properties:
+        stations:
+          type: array
+          items: { $ref: '#/components/schemas/RadioStation' }
+        nextOffset: { type: integer, nullable: true, description: The `offset` of the next page; null on the last page }
+    RadioCountry:
+      type: object
+      required: [code, name, stationCount]
+      properties:
+        code: { type: string, description: ISO 3166-1 alpha-2, upper case }
+        name: { type: string, description: English name; localise from `code` }
+        stationCount: { type: integer }
+    RadioLanguage:
+      type: object
+      required: [name, stationCount]
+      properties:
+        name: { type: string, description: The value to send as `language` in a search }
+        code: { type: string, nullable: true, description: ISO 639 code where the catalogue has one }
+        stationCount: { type: integer }
+    RadioTag:
+      type: object
+      required: [name, stationCount]
+      properties:
+        name: { type: string, description: The value to send as `tag` in a search }
+        stationCount: { type: integer }
+    RadioTagPage:
+      type: object
+      required: [tags]
+      properties:
+        tags:
+          type: array
+          items: { $ref: '#/components/schemas/RadioTag' }
+        nextOffset: { type: integer, nullable: true, description: The `offset` of the next page; null on the last page }
+    RadioProblem:
+      type: object
+      description: RFC 7807 problem details
+      required: [type, title, detail, status]
+      properties:
+        type:
+          type: string
+          description: >
+            One of urn:multiroom:radio:error:invalid-parameter, :station-not-found,
+            :catalogue-bad-answer, :catalogue-unavailable, :method-not-allowed, :not-found,
+            :internal-error. More may be added.
+        title: { type: string }
+        detail: { type: string }
+        status: { type: integer }
+        instance: { type: string, description: The request path }
+        timestamp: { type: string, format: date-time }
+        parameter: { type: string, description: The offending parameter; only on invalid-parameter }

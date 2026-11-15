@@ -1,4 +1,4 @@
-package multiroom.radio.resolve;
+package multiroom.radio.text;
 
 import java.util.Optional;
 

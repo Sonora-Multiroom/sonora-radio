@@ -43,7 +43,8 @@ class MicrometerRadioMetricsTest {
     @Test
     void valuesOutsideTheClosedSetsAreRecordedAsUnknown() {
         metrics.resolution("made up", "srv", Duration.ZERO);
-        metrics.catalogueRequest("srv", "search", "weird");
+        // RADIO-002: "search" became a real endpoint, so another word stands in for an unknown one
+        metrics.catalogueRequest("srv", "bogus", "weird");
         metrics.discovery("carrier pigeon", "lost");
         assertThat(registry.get("radio.resolutions").tag("outcome", "unknown").counter().count()).isEqualTo(1.0);
         assertThat(registry.get("radio.catalogue.requests").tag("endpoint", "unknown").tag("result", "unknown")
@@ -90,6 +91,53 @@ class MicrometerRadioMetricsTest {
             recorder.resolution("ok", "srv", Duration.ZERO);
             recorder.catalogueRequest("srv", "play", "ok");
             recorder.discovery("dns", "ok");
+        }).doesNotThrowAnyException();
+    }
+
+    // ---- RADIO-002 -----------------------------------------------------------------------------
+
+    @Test
+    void theFourNewEndpointsAreRecordedWithTheirOutcome() {
+        for (String endpoint : new String[]{"search", "countries", "languages", "tags"}) {
+            metrics.catalogueRequest("de1.api.radio-browser.info", endpoint, "ok");
+            metrics.catalogueRequest("de1.api.radio-browser.info", endpoint, "timeout");
+            assertThat(registry.get("radio.catalogue.requests").tag("endpoint", endpoint).tag("result", "ok")
+                    .counter().count()).isEqualTo(1.0);
+            assertThat(registry.get("radio.catalogue.requests").tag("endpoint", endpoint).tag("result", "timeout")
+                    .counter().count()).isEqualTo(1.0);
+        }
+    }
+
+    @Test
+    void aPrometheusScrapeShowsTheNewEndpoints() {
+        PrometheusMeterRegistry prometheus = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        MicrometerRadioMetrics recorder = new MicrometerRadioMetrics(prometheus);
+        for (String endpoint : new String[]{"search", "countries", "languages", "tags"}) {
+            recorder.catalogueRequest("srv", endpoint, "ok");
+        }
+        String scrape = prometheus.scrape();
+        assertThat(scrape).contains("endpoint=\"search\"", "endpoint=\"countries\"", "endpoint=\"languages\"",
+                "endpoint=\"tags\"");
+    }
+
+    @Test
+    void noTagValueIsDerivedFromAClientOrCatalogueString() {
+        metrics.catalogueRequest("srv", "search?name=secret-station", "ok");
+        metrics.catalogueRequest("srv", "tags/jazz", "ok");
+        assertThat(registry.get("radio.catalogue.requests").tag("endpoint", "unknown").counter().count())
+                .isEqualTo(2.0);
+        registry.getMeters().forEach(meter -> meter.getId().getTags()
+                .forEach(tag -> assertThat(tag.getValue()).doesNotContain("secret").doesNotContain("jazz")));
+    }
+
+    @Test
+    void theNoopImplementationWorksWithNoRegistry() {
+        NoopRadioMetrics noop = new NoopRadioMetrics();
+        assertThatCode(() -> {
+            noop.catalogueRequest("srv", RadioMetrics.ENDPOINT_SEARCH, "ok");
+            noop.catalogueRequest("srv", RadioMetrics.ENDPOINT_COUNTRIES, "ok");
+            noop.catalogueRequest("srv", RadioMetrics.ENDPOINT_LANGUAGES, "ok");
+            noop.catalogueRequest("srv", RadioMetrics.ENDPOINT_TAGS, "ok");
         }).doesNotThrowAnyException();
     }
 }

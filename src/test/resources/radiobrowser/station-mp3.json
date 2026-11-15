@@ -6,7 +6,7 @@
     "url": "https://stream.example.test/live.pls",
     "url_resolved": "https://stream.example.test/live.mp3",
     "homepage": "https://example.test/",
-    "favicon": "",
+    "favicon": "https://example.test/icon.png",
     "tags": "pop,test",
     "country": "Nowhere",
     "countrycode": "XX",

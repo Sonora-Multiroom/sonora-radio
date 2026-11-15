@@ -60,7 +60,7 @@ class RadioStationResolverTest {
     private Logger logger;
 
     private static Station station(String codec, boolean hls, String streamUrl) {
-        return new Station(ID, "Test FM", streamUrl, codec, hls);
+        return multiroom.radio.support.Fixtures.station(ID, "Test FM", streamUrl, codec, hls);
     }
 
     private static AudioInputDefinition input(String uri) {
@@ -187,7 +187,7 @@ class RadioStationResolverTest {
 
     @Test
     void aNameWithControlCharactersStillBecomesATitle() {
-        lookupAnswers(new Station(ID, "Test\u0000\n FM", "https://s.example.test/a", "MP3", false), "srv1");
+        lookupAnswers(multiroom.radio.support.Fixtures.station(ID, "Test\u0000\n FM", "https://s.example.test/a", "MP3", false), "srv1");
         playAnswers(new PlayReport(true, "https://s.example.test/a"), "srv1");
         assertThat(resolver.resolve(input(URI_TEXT)).title()).isEqualTo("Test FM");
     }

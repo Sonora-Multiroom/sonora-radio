@@ -53,7 +53,7 @@ Needs `multiroom-api` and `multiroom-extension-starter` 0.1.33 in `~/.m2` (in `s
 `mvn -pl multiroom-api,multiroom-extension-starter -am install`).
 
 ```bash
-mvn verify                 # tests with WireMock and injected DNS; JaCoCo gates (80% module, 90% resolve/catalogue)
+mvn verify                 # tests with WireMock and injected DNS; JaCoCo gate (80% lines, module and each core package)
 mvn deploy -Plocal         # copies the JAR to the sibling hub checkout's extensions folder
 ```
 

@@ -58,6 +58,12 @@ public class RadioProperties {
     /** How many station lookups are kept; the oldest is dropped first. */
     private int stationCacheSize = 100;
 
+    /**
+     * The budget of one whole {@code /api/radio/**} request, server discovery and failover included.
+     * Each attempt on one server gets at most half of it.
+     */
+    private Duration requestTimeout = Duration.ofSeconds(5);
+
     /** {@code false} refuses stations marked HLS. */
     private boolean allowHls = true;
 
@@ -165,6 +171,14 @@ public class RadioProperties {
         this.allowHls = allowHls;
     }
 
+    public Duration getRequestTimeout() {
+        return requestTimeout;
+    }
+
+    public void setRequestTimeout(Duration requestTimeout) {
+        this.requestTimeout = requestTimeout;
+    }
+
     // ---- validation: explicit checks so the message names the property --------------------------
 
     @AssertTrue(message = "multiroom.radio.connect-timeout: Positive")
@@ -210,6 +224,11 @@ public class RadioProperties {
     @AssertTrue(message = "multiroom.radio.station-cache-size: 1–10000")
     boolean isStationCacheSizeValid() {
         return stationCacheSize >= 1 && stationCacheSize <= 10000;
+    }
+
+    @AssertTrue(message = "multiroom.radio.request-timeout: Positive")
+    boolean isRequestTimeoutValid() {
+        return positive(requestTimeout);
     }
 
     @AssertTrue(message = "multiroom.radio.servers: each entry must be an absolute http/https URL with a host, "

@@ -1,0 +1,22 @@
+[
+  {
+    "name": "The United States Of America",
+    "iso_3166_1": "US",
+    "stationcount": 6947
+  },
+  {
+    "name": "Ukraine",
+    "iso_3166_1": "UA",
+    "stationcount": 312
+  },
+  {
+    "name": "No Code Land",
+    "stationcount": 5
+  },
+  "junk",
+  {
+    "name": "Odd Code",
+    "iso_3166_1": "x1",
+    "stationcount": 2
+  }
+]
