@@ -11,6 +11,25 @@ reviewed against the code 2026-11-14). This is RADIO-002: read-only requests und
 that let every hub client search and browse the radio-browser.info catalogue through the hub. It
 builds on RADIO-001 (play a station by its UUID).
 
+## Clarifications
+
+### Session 2026-11-15
+
+- Q: Should a search by `tag` or `language` match exactly or match any text that contains the
+  value? → A: `language` always matches exactly. `tag` matches the whole tag by default; a boolean
+  parameter (`tagExact`, default true) set to false makes it match any tag that contains the value
+  as whole words ("jazz" matches "acid jazz"; "pop" does not match "popular").
+- Q: May a page come back shorter than `limit` when the hub drops stations after the catalogue
+  answers, and how does a client know it has reached the end? → A: Yes. For every search and tag
+  listing only an empty page means the end; `offset` counts catalogue positions, so the client
+  adds `limit` to it, not the number of entries received.
+- Q: In what order do stations come back when a search has filters and no `order`? → A: Always
+  most-clicked first (`clickCount`, highest first), with or without filters.
+- Q: Should this feature teach the hub which catalogue codec labels it cannot play, so that
+  `playable` can be false? → A: Not in code. The live acceptance gains one read-only step that
+  records the catalogue's codec labels and their station counts, as evidence for the follow-up
+  backlog item.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The actors are **hub clients** (`sonora-cli`, `sonora-mcp`, `sonora-mobile`, Home Assistant, or a
@@ -39,15 +58,19 @@ without the client changing it.
    `playable` flag.
 2. **Given** a search by country code, tag, language, codec or minimum bitrate, alone or combined,
    **When** it is sent, **Then** only stations matching every given filter are returned.
-3. **Given** no filters and no ordering, **When** a client asks for stations, **Then** it receives
+3. **Given** a search with `tag=jazz`, **When** it is sent as it is, **Then** only stations tagged
+   exactly "jazz" are returned; **When** it is sent with `tagExact=false`, **Then** stations tagged
+   "acid jazz" are returned too, and a search for `tag=pop` never returns a station whose only
+   matching tag is "popular".
+4. **Given** no filters and no ordering, **When** a client asks for stations, **Then** it receives
    20 stations, the most-clicked first.
-4. **Given** a search with more matches than one page, **When** the client asks for the next page
-   with `offset`, **Then** it receives the following stations, and a page shorter than the
-   requested `limit` tells it that this was the last page.
-5. **Given** a station from a search result, **When** the client passes its `uri` to the hub's play
+5. **Given** a search with more matches than one page, **When** the client asks for the next page
+   with `offset` raised by `limit`, **Then** it receives the following stations; a page may hold
+   fewer than `limit` stations, and only an empty page tells it that there are no more.
+6. **Given** a station from a search result, **When** the client passes its `uri` to the hub's play
    request, **Then** the station plays as RADIO-001 describes; the search itself reported no play
    to the catalogue.
-6. **Given** a station the catalogue marks as broken, **When** a search runs, **Then** that station
+7. **Given** a station the catalogue marks as broken, **When** a search runs, **Then** that station
    is not in the results.
 
 ---
@@ -172,9 +195,15 @@ the extension off, restart, and see the requests answer "not found" while the hu
 
 - **A search that matches nothing**: an empty list, not an error.
 - **`limit` above the configured cap, zero or negative; `offset` negative or above its cap**:
-  refused as invalid, naming the allowed range. A silently reduced `limit` would make a full page
-  look like the last one.
-- **An `offset` past the end of the results**: an empty list.
+  refused as invalid, naming the allowed range. A silently reduced `limit` would make a client
+  that adds its own `limit` to `offset` skip stations.
+- **An `offset` past the end of the results**: an empty list, which is how a client learns it has
+  reached the end.
+- **A page with fewer stations than `limit`, or none of the catalogue's matches left after the
+  whole-word check**: the page is returned as it is, short but not empty while the catalogue still
+  had matches at that position; where every match on a page was dropped, the client sees an empty
+  page and stops. Accepted: it can only hide results of a `tagExact=false` search whose page held
+  nothing but near-misses.
 - **A blank filter** (`name=` with nothing, or only spaces): treated as not given.
 - **A filter value that is very long or contains control characters**: refused as invalid; nothing
   that long is a station name, tag or language.
@@ -189,8 +218,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **A favicon or homepage that is not an `http`/`https` address, or is extremely long**: returned
   as empty. The hub never fetches these addresses.
 - **A bitrate of 0**: the catalogue's way of saying "unknown"; returned as empty, not as 0.
-- **An unplayable station in a result**: flagged with `playable: false`, never removed, so page
-  sizes stay honest.
+- **An unplayable station in a result**: flagged with `playable: false`, never removed, so a
+  client can show it as unavailable instead of the person wondering where it went.
 - **A country entry in the catalogue without a valid two-letter code**: dropped from the country
   list. A language without a code is kept, with an empty code.
 - **The same search repeated within a minute**: answered from memory; a station added upstream in
@@ -224,8 +253,14 @@ the extension off, restart, and see the requests answer "not found" while the hu
 **Search**
 
 - **FR-005**: Search MUST accept the optional filters `name`, `tag`, `countryCode`, `language`,
-  `codec` and `bitrateMin`, and return only stations matching every filter given. Text filters
-  match as the catalogue matches them.
+  `codec` and `bitrateMin`, and return only stations matching every filter given. All text
+  matching ignores letter case:
+  - `name` matches any part of the station name;
+  - `language` and `codec` match the whole value only;
+  - `tag` matches a whole tag by default. With the boolean `tagExact=false` (default true) it
+    matches any tag that contains the value as whole words: "jazz" matches "acid jazz" and "jazz
+    fusion", "pop" matches "k-pop" and does not match "popular". A word is a run of letters and
+    digits; a value of several words must appear as those words in that order.
 - **FR-006**: Search MUST never return stations the catalogue marks as broken.
 - **FR-007**: Search MUST accept `limit` (default 20) and `offset` (default 0). `limit` MUST be
   between 1 and a configured cap (default 100); `offset` MUST be between 0 and a configured cap
@@ -239,8 +274,11 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **FR-010**: `countryCode` MUST be two letters (ISO 3166-1 alpha-2), accepted in either case.
   `bitrateMin` MUST be a non-negative whole number. Text filters MUST be trimmed, ignored when
   blank, and refused when longer than a fixed bound or containing control characters.
-- **FR-011**: A search result MUST be a plain list of stations. A page shorter than the requested
-  `limit` is the last page; the extension MUST NOT shorten a page for any other reason.
+- **FR-011**: A search result MUST be a plain list of stations. `offset` and `limit` count
+  positions in the catalogue's answer: a page MAY hold fewer than `limit` stations, because the
+  extension drops records after the catalogue answers (the whole-word check, records without a
+  valid UUID), and the extension MUST NOT ask the catalogue again to fill it. Only an empty page
+  means the end; a client pages by adding `limit` to `offset`. The tag list follows the same rule.
 
 **One station**
 
@@ -282,8 +320,9 @@ the extension off, restart, and see the requests answer "not found" while the hu
 
 - **FR-023**: Errors MUST be RFC 7807 problem details, like REST v2, and MUST affect only this
   extension's requests:
-  - 400: a malformed UUID, country code, `order`, `limit`, `offset`, `bitrateMin`, boolean or text
-    filter; the error names the parameter and no network call is made;
+  - 400: a malformed UUID, country code, `order`, `limit`, `offset`, `bitrateMin`, boolean
+    (`reverse`, `tagExact`) or text filter; the error names the parameter and no network call is
+    made;
   - 404: a well-formed UUID the catalogue does not know;
   - 502: the catalogue answered with something unreadable, or refused the request;
   - 503: no catalogue server answered within the time budget.
@@ -353,8 +392,9 @@ the extension off, restart, and see the requests answer "not found" while the hu
   refused without the catalogue being contacted.
 - **SC-006**: No single request can ask the catalogue for more than the configured cap of results
   (100 by default), and repeating a browse list within its lifetime costs the catalogue nothing.
-- **SC-007**: A full page always means "there may be more" and a short page always means "the
-  end", for every search and tag listing.
+- **SC-007**: A client that pages by adding `limit` to `offset` until it receives an empty page
+  sees every station the search matches at most once per catalogue state, with one rule for every
+  search and tag listing.
 - **SC-008**: Hub start-up is no slower with this feature than with RADIO-001 alone, including when
   radio-browser.info is unreachable.
 
@@ -379,6 +419,11 @@ restarting the hub need the owner's permission as always.
 6. Check the upstream facts this feature assumes and correct the spec if they differ: `tags` and
    `language` arrive as comma-separated text, a `bitrate` of 0 means unknown, the size of the full
    tag list, and the fields of the catalogue's country and language lists.
+7. Record which codec labels the catalogue uses: one read-only request for the catalogue's codec
+   list (`/json/codecs`, with the extension's user agent), saved with each label's station count
+   in `verification.md`. The labels the hub cannot play (WMA, labels that include a video codec)
+   are named there, and the backlog question "labels the hub cannot play" is updated from that
+   evidence. Nothing in this feature's code depends on the result.
 
 Not live: "every configured server unreachable answers 503 within the time budget, and the rest of
 the hub keeps answering" is proved by an automated test against a stand-in catalogue. On production
@@ -395,22 +440,25 @@ has the form RADIO-001 accepts.
 - **No hub change is needed**: the hub serves an extension's requests and includes them in its API
   description, as it does for `/api/tts/**`.
 - **Decided here, where the backlog item was silent or open**:
-  - *Out-of-range `limit` and `offset` are refused (400), not silently reduced*, so that "a short
-    page is the last page" stays true for a client that does not know the cap.
-  - *The default ordering is `clickCount`, highest first, with or without filters.* The backlog
-    item fixed this only for the no-filter case; one rule is simpler for clients, and popularity
-    is the more useful order for a name or genre search.
+  - *Out-of-range `limit` and `offset` are refused (400), not silently reduced*, so that a
+    client that does not know the cap never advances `offset` by more than the hub served.
+  - *The default ordering is `clickCount`, highest first, with or without filters* (confirmed by
+    the owner, see Clarifications). The backlog item fixed this only for the no-filter case; one
+    rule is simpler for clients, and popularity is the more useful order for a name or genre
+    search.
   - *Cache lifetimes*: 6 hours for lists and 60 seconds for searches, both configurable.
   - *Bounds on untrusted text* (tag length, tags per station, address length, filter length) are
     fixed values chosen during planning, not settings.
 - **`playable` is true for every station today**: the hub decodes every codec label the extension
   maps, and unmapped labels are let through. Teaching the codec decision about labels that are
   known not to work (WMA, video mixes) stays an open backlog question and is not part of this
-  feature; when it is answered, `playable` and RADIO-001's refusal change together.
+  feature's code; live acceptance step 7 collects the labels the catalogue really uses, so the
+  follow-up starts from evidence. When it is answered, `playable` and RADIO-001's refusal change
+  together.
 - **Out of scope**: a play request; voting; a `playableOnly` filter (only if a client asks once
   `playable` is ever false); favourites (`favourite-stations.md`); other filters the catalogue has
-  (`bitrateMax`, `is_https`, exact-match variants, several tags at once); totals or "has more"
-  markers in results.
+  (`bitrateMax`, `is_https`, several tags at once, word matching for `name` or `language`);
+  totals or "has more" markers in results.
 - **Client work is separate**: `sonora radio …` commands and `hub` package methods in `sonora-cli`,
   the MCP tool in `sonora-mcp` and the browse and search screen in `sonora-mobile` go into those
   repositories' backlogs once this API is fixed, as does the question of whether their copies of
