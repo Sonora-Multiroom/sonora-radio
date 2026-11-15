@@ -274,6 +274,9 @@ the extension off, restart, and see the requests answer "not found" while the hu
 - **A `%` in a text filter**: refused as invalid. The catalogue treats it as "any text", so
   `tag=%` would match every station that has a tag. An `_` is passed on and may match any one
   character; that only widens a match slightly and tags do contain it.
+- **A `/` in the tag list's `name` filter**: refused as invalid. The catalogue takes that filter
+  as part of the address, and whether it accepts a `/` there is not documented. A search's `tag`
+  filter may contain one.
 - **A country code in lower case** (`ua`): accepted and treated as `UA`. Three letters, digits or
   anything else: refused.
 - **A station with no usable name, a very long name, HTML or control characters in its name or
@@ -391,7 +394,8 @@ the extension off, restart, and see the requests answer "not found" while the hu
   hidden; the play request reports the refusal.
 - **FR-020**: Text from the catalogue MUST be stripped of control characters and bounded before it
   is returned: a station name to 256 characters (as in RADIO-001), each tag and language to a fixed
-  length, and the number of tags and languages per station to a fixed count.
+  length, and the number of tags and languages per station to a fixed count. A tag or language
+  longer than the bound is dropped, not cut: a cut tag would match nothing when used as a filter.
 - **FR-021**: `favicon` and `homepage` MUST be returned only when they are `http` or `https`
   addresses of bounded length, and empty otherwise. The extension MUST NOT fetch them.
 - **FR-022**: Reading the catalogue's records MUST tolerate unknown, missing and malformed fields:
