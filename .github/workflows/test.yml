@@ -1,0 +1,54 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  # multiroom-api and the starter parent are never published; they are built from the private
+  # hub repository at the commit whose version matches this pom's <parent> version (0.1.33).
+  # When the parent version is raised, move this to the last hub commit of the new version.
+  HUB_REF: af3654f8ec3a0f574295c45770091bdc1acde858
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout the hub (multiroom-ai)
+        uses: actions/checkout@v4
+        with:
+          repository: tiger-seo/multiroom-ai
+          ref: ${{ env.HUB_REF }}
+          ssh-key: ${{ secrets.HUB_DEPLOY_KEY }}
+          path: hub
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: maven
+
+      - name: Check the hub ref matches the parent version
+        run: |
+          parent=$(sed -n '/<parent>/,/<\/parent>/s:.*<version>\(.*\)</version>.*:\1:p' pom.xml)
+          hub=$(mvn -B -q -f hub/multiroom-api/pom.xml help:evaluate -Dexpression=project.version -DforceStdout)
+          if [ "$parent" != "$hub" ]; then
+            echo "pom.xml's parent is $parent but HUB_REF builds multiroom-api $hub; update HUB_REF"
+            exit 1
+          fi
+
+      - name: Install multiroom-api and the starter from the hub
+        run: mvn -B -f hub/pom.xml -pl multiroom-api,multiroom-extension-starter -am install -DskipTests
+
+      - name: Verify
+        run: mvn -B verify
+
+      - name: Keep the hub's artifacts out of the Maven cache
+        if: always()
+        run: rm -rf ~/.m2/repository/ai/multiroom
