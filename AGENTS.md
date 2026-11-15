@@ -153,4 +153,7 @@ inherited from the starter: use `-Plocal` while developing.
   radio-browser.info that the feature's spec carries over and `verification.md` records;
   `docs/backlog/INDEX.md` lists every item with a priority P1–P4. Delete an item once it ships, or
   update it if part remains. Work for another repository goes into that repository's backlog.
+- **Discovery** in `docs/discovery/`: desk research that is not yet a proposal (for example
+  `radio-catalogues.md`, other station catalogues). Promote a finding to a backlog item when a decision
+  is needed; keep sources and the date, and mark what was not verified.
 - Do not cite `FR-`, `SC-` or `US` numbers in code; `RADIO-NNN` and `HUB-NNN` are fine.
